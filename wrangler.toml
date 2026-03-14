@@ -4,3 +4,16 @@ compatibility_date = "2026-03-14"
 
 [build]
 command = "cargo install -q \"worker-build@^0.7\" && worker-build --release"
+
+[vars]
+DEPARTURE_CACHE_TTL = "60"
+
+[[kv_namespaces]]
+binding = "CACHE"
+id = "0da949fc58a5490080810f64eea0960f"
+
+[observability]
+enabled = true
+
+[observability.logs]
+invocation_logs = false
