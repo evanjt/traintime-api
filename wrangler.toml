@@ -3,7 +3,7 @@ main = "build/index.js"
 compatibility_date = "2026-03-14"
 
 [build]
-command = "export PATH=\"$HOME/.cargo/bin:$PATH\" && command -v cargo >/dev/null || curl -sSf https://sh.rustup.rs | sh -s -- -y -q 2>/dev/null && export PATH=\"$HOME/.cargo/bin:$PATH\" && rustup target add wasm32-unknown-unknown -q 2>/dev/null && cargo install -q \"worker-build@^0.7\" && worker-build --release"
+command = "export PATH=\"$HOME/.cargo/bin:$PATH\" && command -v cargo >/dev/null || curl -sSf https://sh.rustup.rs | sh -s -- -y -q 2>/dev/null && export PATH=\"$HOME/.cargo/bin:$PATH\" && rustup target add wasm32-unknown-unknown 2>/dev/null && cargo install -q \"worker-build@^0.7\" && worker-build --release"
 
 [vars]
 DEPARTURE_CACHE_TTL = "60"
