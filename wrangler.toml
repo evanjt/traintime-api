@@ -3,7 +3,7 @@ main = "build/index.js"
 compatibility_date = "2026-03-14"
 
 [build]
-command = "cargo install -q \"worker-build@^0.7\" && worker-build --release"
+command = "command -v cargo >/dev/null || (curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain stable --target wasm32-unknown-unknown && export PATH=\"$HOME/.cargo/bin:$PATH\") && export PATH=\"$HOME/.cargo/bin:$PATH\" && rustup target add wasm32-unknown-unknown 2>/dev/null; cargo install -q \"worker-build@^0.7\" && worker-build --release"
 
 [vars]
 DEPARTURE_CACHE_TTL = "60"
