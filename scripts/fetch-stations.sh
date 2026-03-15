@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-OUTPUT="$SCRIPT_DIR/../src/data/stations.json"
+OUTPUT="$SCRIPT_DIR/../data/stations.json"
 
 URL="https://data.sbb.ch/api/explore/v2.1/catalog/datasets/dienststellen-gemass-opentransportdataswiss/exports/json?select=number,designationofficial,geopos,meansoftransport,stoppoint&where=stoppoint%20%3D%20%22true%22"
 

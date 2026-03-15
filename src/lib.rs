@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use axum::http::StatusCode;
 use axum::routing::get;
 use axum::{Json, Router};
@@ -7,13 +9,13 @@ use worker::*;
 
 mod ojp;
 mod routes;
-mod stations;
 
 type AxumResponse = axum::http::Response<axum::body::Body>;
 
 #[derive(Clone)]
 pub struct AppState {
     pub cache: KvStore,
+    pub db: Arc<worker::d1::D1Database>,
     pub ojp_api_key: String,
     pub cache_ttl: u64,
 }
@@ -100,6 +102,7 @@ async fn fetch(req: HttpRequest, env: Env, _ctx: Context) -> Result<AxumResponse
 
     // Build state
     let cache = env.kv("CACHE")?;
+    let db = env.d1("DB")?;
     let ojp_api_key = env
         .secret("OJP_API_KEY")
         .map(|s| s.to_string())
@@ -112,6 +115,7 @@ async fn fetch(req: HttpRequest, env: Env, _ctx: Context) -> Result<AxumResponse
 
     let state = AppState {
         cache,
+        db: Arc::new(db),
         ojp_api_key,
         cache_ttl,
     };

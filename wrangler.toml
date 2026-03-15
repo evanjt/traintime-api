@@ -12,5 +12,10 @@ DEPARTURE_CACHE_TTL = "60"
 binding = "CACHE"
 id = "0da949fc58a5490080810f64eea0960f"
 
+[[d1_databases]]
+binding = "DB"
+database_name = "traintime-stations"
+database_id = "6f77d13d-6731-4b46-b0f7-177a7eeb6aa1"
+
 [observability]
 enabled = false

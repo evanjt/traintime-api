@@ -2,11 +2,12 @@ use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
+use futures::future::join_all;
 use serde::{Deserialize, Serialize};
+use wasm_bindgen::JsValue;
 use worker::console_log;
 
 use crate::ojp::{fetch_departures, FlatDeparture};
-use crate::stations::STATIONS;
 use crate::AppState;
 
 const MAX_PER_MODE: usize = 5;
@@ -28,6 +29,15 @@ struct NearbyStation {
     lon: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     departures: Option<Vec<FlatDeparture>>,
+}
+
+#[derive(Deserialize)]
+struct StationRow {
+    id: String,
+    name: String,
+    lat: f64,
+    lon: f64,
+    mode: String,
 }
 
 fn haversine_distance(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
@@ -57,32 +67,68 @@ pub async fn handle_nearby(
 
     let query_lower = params.query.map(|q| q.to_lowercase());
 
+    // ~5km bounding box in degrees
+    let dlat = MAX_DISTANCE / 111000.0;
+    let dlon = MAX_DISTANCE / 75700.0;
+
+    let lat_min = lat - dlat;
+    let lat_max = lat + dlat;
+    let lon_min = lon - dlon;
+    let lon_max = lon + dlon;
+
+    let bound = if let Some(ref q) = query_lower {
+        let pattern = format!("%{q}%");
+        state.db
+            .prepare("SELECT id, name, lat, lon, mode FROM stations WHERE lat BETWEEN ?1 AND ?2 AND lon BETWEEN ?3 AND ?4 AND LOWER(name) LIKE LOWER(?5)")
+            .bind(&[JsValue::from_f64(lat_min), JsValue::from_f64(lat_max), JsValue::from_f64(lon_min), JsValue::from_f64(lon_max), JsValue::from_str(&pattern)])
+    } else {
+        state.db
+            .prepare("SELECT id, name, lat, lon, mode FROM stations WHERE lat BETWEEN ?1 AND ?2 AND lon BETWEEN ?3 AND ?4")
+            .bind(&[JsValue::from_f64(lat_min), JsValue::from_f64(lat_max), JsValue::from_f64(lon_min), JsValue::from_f64(lon_max)])
+    };
+
+    let stmt = match bound {
+        Ok(s) => s,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            );
+        }
+    };
+
+    let rows: Vec<StationRow> = match stmt.all().await {
+        Ok(r) => match r.results::<StationRow>() {
+            Ok(rows) => rows,
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": e.to_string() })),
+                );
+            }
+        },
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            );
+        }
+    };
+
     let mut train: Vec<(String, String, i64, f64, f64)> = Vec::new();
     let mut bus: Vec<(String, String, i64, f64, f64)> = Vec::new();
     let mut tram: Vec<(String, String, i64, f64, f64)> = Vec::new();
     let mut special: Vec<(String, String, i64, f64, f64)> = Vec::new();
 
-    for s in STATIONS.iter() {
-        if let Some(ref q) = query_lower {
-            if !s.name.to_lowercase().contains(q) {
-                continue;
-            }
-        }
-
-        let dist = haversine_distance(lat, lon, s.lat, s.lon);
+    for row in rows {
+        let dist = haversine_distance(lat, lon, row.lat, row.lon);
         if dist > MAX_DISTANCE {
             continue;
         }
 
-        let entry = (
-            s.id.clone(),
-            s.name.clone(),
-            dist.round() as i64,
-            s.lat,
-            s.lon,
-        );
+        let entry = (row.id, row.name, dist.round() as i64, row.lat, row.lon);
 
-        match s.mode.as_str() {
+        match row.mode.as_str() {
             "bus" => bus.push(entry),
             "tram" => tram.push(entry),
             "special" => special.push(entry),
@@ -105,39 +151,42 @@ pub async fn handle_nearby(
         }
     }
 
-    let mut departure_map = std::collections::HashMap::new();
-
-    for id in &closest_ids {
-        let cache_key = format!("departures:{id}:{dep_limit}");
-
-        // Check cache
-        if let Ok(Some(cached)) = state.cache.get(&cache_key).text().await {
-            console_log!("CACHE HIT departures:{}:{}", id, dep_limit);
-            if let Ok(deps) = serde_json::from_str::<Vec<FlatDeparture>>(&cached) {
-                departure_map.insert(id.clone(), deps);
-                continue;
-            }
-        }
-
-        console_log!("CACHE MISS departures:{}:{}", id, dep_limit);
-        match fetch_departures(&state.ojp_api_key, id, dep_limit).await {
-            Ok(deps) => {
-                if let Ok(json_str) = serde_json::to_string(&deps) {
-                    let _ = state
-                        .cache
-                        .put(&cache_key, &json_str)
-                        .unwrap()
-                        .expiration_ttl(state.cache_ttl)
-                        .execute()
-                        .await;
+    let fetch_futures: Vec<_> = closest_ids
+        .iter()
+        .map(|id| {
+            let cache = state.cache.clone();
+            let api_key = state.ojp_api_key.clone();
+            let id = id.clone();
+            let cache_ttl = state.cache_ttl;
+            async move {
+                let cache_key = format!("departures:{id}:{dep_limit}");
+                if let Ok(Some(cached)) = cache.get(&cache_key).text().await {
+                    console_log!("CACHE HIT departures:{}:{}", id, dep_limit);
+                    if let Ok(deps) = serde_json::from_str::<Vec<FlatDeparture>>(&cached) {
+                        return (id, deps);
+                    }
                 }
-                departure_map.insert(id.clone(), deps);
+                console_log!("CACHE MISS departures:{}:{}", id, dep_limit);
+                match fetch_departures(&api_key, &id, dep_limit).await {
+                    Ok(deps) => {
+                        if let Ok(json_str) = serde_json::to_string(&deps) {
+                            let _ = cache
+                                .put(&cache_key, &json_str)
+                                .unwrap()
+                                .expiration_ttl(cache_ttl)
+                                .execute()
+                                .await;
+                        }
+                        (id, deps)
+                    }
+                    Err(_) => (id, Vec::new()),
+                }
             }
-            Err(_) => {
-                departure_map.insert(id.clone(), Vec::new());
-            }
-        }
-    }
+        })
+        .collect();
+
+    let departure_map: std::collections::HashMap<_, _> =
+        join_all(fetch_futures).await.into_iter().collect();
 
     let to_response = |list: &[(String, String, i64, f64, f64)]| -> Vec<NearbyStation> {
         list.iter()

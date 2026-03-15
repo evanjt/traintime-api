@@ -21,13 +21,13 @@ jobs:
       - name: Check for changes
         id: diff
         run: |
-          if git diff --quiet src/data/stations.json; then
+          if git diff --quiet data/stations.json; then
             echo "No changes detected"
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
-            OLD=$(git show HEAD:src/data/stations.json | wc -l)
-            NEW=$(wc -l < src/data/stations.json)
+            OLD=$(git show HEAD:data/stations.json | wc -l)
+            NEW=$(wc -l < data/stations.json)
             # Subtract 2 for the [ and ] lines
             OLD_COUNT=$((OLD - 2))
             NEW_COUNT=$((NEW - 2))
@@ -36,6 +36,12 @@ jobs:
             echo "summary=${SIGN}${DIFF} stations (${OLD_COUNT} → ${NEW_COUNT})" >> "$GITHUB_OUTPUT"
             echo "${SIGN}${DIFF} stations (${OLD_COUNT} → ${NEW_COUNT})"
           fi
+
+      - name: Seed D1 database
+        if: steps.diff.outputs.changed == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: bash scripts/seed_d1.sh
 
       - name: Create pull request
         if: steps.diff.outputs.changed == 'true'
@@ -46,6 +52,8 @@ jobs:
           commit-message: "Update station data from SBB Didok"
           title: "Update station data (${{ steps.diff.outputs.summary }})"
           body: |
-            Automated update of `src/data/stations.json` from the [SBB Didok dataset](https://data.sbb.ch/explore/dataset/dienststellen-gemass-opentransportdataswiss).
+            Automated update of `data/stations.json` from the [SBB Didok dataset](https://data.sbb.ch/explore/dataset/dienststellen-gemass-opentransportdataswiss).
 
             **Change: ${{ steps.diff.outputs.summary }}**
+
+            D1 database has been seeded with the updated data.
