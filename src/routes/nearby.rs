@@ -2,7 +2,6 @@ use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
-use futures::future::join_all;
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsValue;
 use worker::console_log;
@@ -142,51 +141,44 @@ pub async fn handle_nearby(
         group.truncate(MAX_PER_MODE);
     }
 
-    // Fetch departures for closest station per non-empty mode
+    // Fetch departures for only the default station (first available mode's closest)
     let dep_limit = 10u32;
-    let mut closest_ids: Vec<String> = Vec::new();
-    for group in [&train, &bus, &tram, &special] {
-        if let Some(first) = group.first() {
-            closest_ids.push(first.0.clone());
+    let default_id = [&train, &bus, &tram, &special]
+        .iter()
+        .find_map(|g| g.first().map(|s| s.0.clone()));
+
+    let mut departure_map: std::collections::HashMap<String, Vec<FlatDeparture>> =
+        std::collections::HashMap::new();
+
+    if let Some(id) = default_id {
+        let cache_key = format!("departures:{id}:{dep_limit}");
+        let mut deps: Option<Vec<FlatDeparture>> = None;
+
+        if let Ok(Some(cached)) = state.cache.get(&cache_key).text().await {
+            console_log!("CACHE HIT departures:{}:{}", id, dep_limit);
+            deps = serde_json::from_str(&cached).ok();
+        }
+
+        if deps.is_none() {
+            console_log!("CACHE MISS departures:{}:{}", id, dep_limit);
+            if let Ok(fetched) = fetch_departures(&state.ojp_api_key, &id, dep_limit).await {
+                if let Ok(json_str) = serde_json::to_string(&fetched) {
+                    let _ = state
+                        .cache
+                        .put(&cache_key, &json_str)
+                        .unwrap()
+                        .expiration_ttl(state.cache_ttl)
+                        .execute()
+                        .await;
+                }
+                deps = Some(fetched);
+            }
+        }
+
+        if let Some(d) = deps {
+            departure_map.insert(id, d);
         }
     }
-
-    let fetch_futures: Vec<_> = closest_ids
-        .iter()
-        .map(|id| {
-            let cache = state.cache.clone();
-            let api_key = state.ojp_api_key.clone();
-            let id = id.clone();
-            let cache_ttl = state.cache_ttl;
-            async move {
-                let cache_key = format!("departures:{id}:{dep_limit}");
-                if let Ok(Some(cached)) = cache.get(&cache_key).text().await {
-                    console_log!("CACHE HIT departures:{}:{}", id, dep_limit);
-                    if let Ok(deps) = serde_json::from_str::<Vec<FlatDeparture>>(&cached) {
-                        return (id, deps);
-                    }
-                }
-                console_log!("CACHE MISS departures:{}:{}", id, dep_limit);
-                match fetch_departures(&api_key, &id, dep_limit).await {
-                    Ok(deps) => {
-                        if let Ok(json_str) = serde_json::to_string(&deps) {
-                            let _ = cache
-                                .put(&cache_key, &json_str)
-                                .unwrap()
-                                .expiration_ttl(cache_ttl)
-                                .execute()
-                                .await;
-                        }
-                        (id, deps)
-                    }
-                    Err(_) => (id, Vec::new()),
-                }
-            }
-        })
-        .collect();
-
-    let departure_map: std::collections::HashMap<_, _> =
-        join_all(fetch_futures).await.into_iter().collect();
 
     let to_response = |list: &[(String, String, i64, f64, f64)]| -> Vec<NearbyStation> {
         list.iter()
