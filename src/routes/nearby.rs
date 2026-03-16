@@ -142,7 +142,7 @@ pub async fn handle_nearby(
     }
 
     // Fetch departures for only the default station (first available mode's closest)
-    let dep_limit = 10u32;
+    let dep_limit = 20u32;
     let default_id = [&train, &bus, &tram, &special]
         .iter()
         .find_map(|g| g.first().map(|s| s.0.clone()));
