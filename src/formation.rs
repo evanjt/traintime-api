@@ -43,7 +43,7 @@ pub fn parse_formation_short_string(short: &str) -> (Vec<String>, Vec<Wagon>) {
     // Remove "):N" patterns (train unit group IDs)
     let re = regex::Regex::new(r"\):\d+").unwrap();
     let cleaned = re.replace_all(&cleaned, "").to_string();
-    let cleaned = cleaned.replace(')', "");
+    let cleaned = cleaned.replace(')', "").replace(']', "");
 
     for token in cleaned.split(',') {
         let token = token.trim();
@@ -132,26 +132,60 @@ pub fn parse_formation_short_string(short: &str) -> (Vec<String>, Vec<Wagon>) {
             }
         }
 
-        // Parse CLASS:NUMBER
+        // Parse CLASS:NUMBER or just CLASS (some operators omit car numbers)
         let class_number: Vec<&str> = base.split(':').collect();
-        if class_number.len() < 2 {
-            // Update trailing sector even if vehicle doesn't parse
+        let class_val: u8;
+        let number_val: u32;
+
+        if class_number.len() >= 2 {
+            // Standard format: "2:9" (class:number)
+            class_val = match class_number[0].parse() {
+                Ok(v) => v,
+                Err(_) => {
+                    if let Some(s) = trailing_sector {
+                        current_sector = s;
+                        if !sectors.contains(&current_sector) { sectors.push(current_sector.clone()); }
+                    }
+                    continue;
+                }
+            };
+            number_val = match class_number[1].parse() {
+                Ok(v) => v,
+                Err(_) => {
+                    if let Some(s) = trailing_sector {
+                        current_sector = s;
+                        if !sectors.contains(&current_sector) { sectors.push(current_sector.clone()); }
+                    }
+                    continue;
+                }
+            };
+        } else if base.len() == 1 {
+            // Short format: just "2" or "1" (class only, no car number)
+            // Use 0 as sentinel — will be resolved in post-processing
+            class_val = match base.parse::<u8>() {
+                Ok(v) if v == 1 || v == 2 => v,
+                _ => {
+                    if let Some(s) = trailing_sector {
+                        current_sector = s;
+                        if !sectors.contains(&current_sector) { sectors.push(current_sector.clone()); }
+                    }
+                    continue;
+                }
+            };
+            number_val = 0;
+        } else if base.len() >= 2 && (base.starts_with('1') || base.starts_with('2')) {
+            // Concatenated format: "12" = class 1, car 2; "23" = class 2, car 3
+            class_val = (base.as_bytes()[0] - b'0') as u8;
+            number_val = match base[1..].parse::<u32>() {
+                Ok(v) => v,
+                _ => (position + 1) as u32,
+            };
+        } else {
             if let Some(s) = trailing_sector {
                 current_sector = s;
-                if !sectors.contains(&current_sector) {
-                    sectors.push(current_sector.clone());
-                }
+                if !sectors.contains(&current_sector) { sectors.push(current_sector.clone()); }
             }
             continue;
-        }
-
-        let class_val: u8 = match class_number[0].parse() {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-        let number_val: u32 = match class_number[1].parse() {
-            Ok(v) => v,
-            Err(_) => continue,
         };
 
         position += 1;
@@ -169,6 +203,39 @@ pub fn parse_formation_short_string(short: &str) -> (Vec<String>, Vec<Wagon>) {
             current_sector = s;
             if !sectors.contains(&current_sector) {
                 sectors.push(current_sector.clone());
+            }
+        }
+    }
+
+    // Post-process: infer missing car numbers (number == 0) from neighbors
+    for i in 0..wagons.len() {
+        if wagons[i].number == 0 {
+            // Look at neighbors to infer: if prev is N+1 and next is N-1, we're N
+            let prev_num = if i > 0 { Some(wagons[i - 1].number) } else { None };
+            let next_num = if i + 1 < wagons.len() { Some(wagons[i + 1].number) } else { None };
+
+            wagons[i].number = match (prev_num, next_num) {
+                // Descending sequence: prev=4, next=2 → we're 3
+                (Some(p), Some(n)) if p > n && p - n == 2 => p - 1,
+                // Ascending sequence: prev=2, next=4 → we're 3
+                (Some(p), Some(n)) if n > p && n - p == 2 => p + 1,
+                // Only prev available, assume descending
+                (Some(p), _) if p > 1 => p - 1,
+                // Only next available, assume descending
+                (_, Some(n)) => n + 1,
+                // Fallback: use position
+                _ => wagons[i].position as u32,
+            };
+        }
+    }
+
+    // If any car numbers are duplicated (coupled units), use sequential position
+    {
+        let mut seen = std::collections::HashSet::new();
+        let has_duplicates = wagons.iter().any(|w| !seen.insert(w.number));
+        if has_duplicates {
+            for w in wagons.iter_mut() {
+                w.number = w.position as u32;
             }
         }
     }

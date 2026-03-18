@@ -16,12 +16,30 @@ pub struct FormationQuery {
     date: Option<String>,
     stop: Option<String>,
     evu: Option<String>,
+    #[serde(rename = "operatorRef")]
+    operator_ref: Option<String>,
 }
 
 /// Strip non-numeric prefix from train number (e.g. "IR95" -> "95", "S3" -> "3")
 fn extract_train_number(raw: &str) -> String {
     raw.trim_start_matches(|c: char| !c.is_ascii_digit())
         .to_string()
+}
+
+/// Map OJP OperatorRef numeric code to formation API EVU code.
+/// See https://api.opentransportdata.swiss/formation/v1 for supported EVUs.
+fn operator_ref_to_evu(op_ref: &str) -> Option<&'static str> {
+    match op_ref {
+        "11" => Some("SBBP"),   // SBB
+        "33" => Some("BLSP"),   // BLS
+        "65" => Some("THURBO"), // Thurbo
+        "82" => Some("SOB"),    // Südostbahn
+        "86" => Some("ZB"),     // Zentralbahn
+        "48" => Some("TPF"),    // Transports publics fribourgeois
+        "39" => Some("TRN"),    // TransN
+        "60" => Some("RhB"),    // Rhätische Bahn
+        _    => None,           // Unknown or unsupported (RegionAlps=74, MBC, etc.)
+    }
 }
 
 #[worker::send]
@@ -57,7 +75,21 @@ pub async fn handle_formation(
         );
     }
 
-    let evu = params.evu.unwrap_or_else(|| "SBBP".to_string());
+    let evu = if let Some(ref e) = params.evu {
+        e.clone()
+    } else if let Some(ref op) = params.operator_ref {
+        match operator_ref_to_evu(op) {
+            Some(mapped) => mapped.to_string(),
+            None => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({ "error": "No formation data" })),
+                );
+            }
+        }
+    } else {
+        "SBBP".to_string()
+    };
     let stop_key = params.stop.as_deref().unwrap_or("all");
     let cache_key = format!("formation:{evu}:{date}:{train_number}:{stop_key}");
 
