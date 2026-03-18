@@ -7,6 +7,7 @@ use tower_service::Service;
 use worker::kv::KvStore;
 use worker::*;
 
+mod formation;
 mod ojp;
 mod routes;
 
@@ -17,6 +18,7 @@ pub struct AppState {
     pub cache: KvStore,
     pub db: Arc<worker::d1::D1Database>,
     pub ojp_api_key: String,
+    pub formation_api_key: String,
     pub cache_ttl: u64,
 }
 
@@ -25,6 +27,7 @@ fn router(state: AppState) -> Router {
         .route("/health", get(health))
         .route("/v1/nearby", get(routes::nearby::handle_nearby))
         .route("/v1/departures", get(routes::departures::handle_departures))
+        .route("/v1/formation", get(routes::formation::handle_formation))
         .fallback(fallback)
         .with_state(state)
 }
@@ -107,6 +110,10 @@ async fn fetch(req: HttpRequest, env: Env, _ctx: Context) -> Result<AxumResponse
         .secret("OJP_API_KEY")
         .map(|s| s.to_string())
         .or_else(|_| env.var("OJP_API_KEY").map(|v| v.to_string()))?;
+    let formation_api_key = env
+        .secret("FORMATION_API_KEY")
+        .map(|s| s.to_string())
+        .or_else(|_| env.var("FORMATION_API_KEY").map(|v| v.to_string()))?;
     let cache_ttl = env
         .var("DEPARTURE_CACHE_TTL")
         .ok()
@@ -117,6 +124,7 @@ async fn fetch(req: HttpRequest, env: Env, _ctx: Context) -> Result<AxumResponse
         cache,
         db: Arc::new(db),
         ojp_api_key,
+        formation_api_key,
         cache_ttl,
     };
 

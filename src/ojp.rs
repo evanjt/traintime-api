@@ -15,6 +15,8 @@ pub struct FlatDeparture {
     pub platform: String,
     #[serde(rename = "platformChanged")]
     pub platform_changed: bool,
+    #[serde(rename = "trainNumber", skip_serializing_if = "Option::is_none")]
+    pub train_number: Option<String>,
 }
 
 fn build_stop_event_request_xml(stop_ref: &str, limit: u32) -> String {
@@ -122,6 +124,8 @@ fn parse_stop_events(xml: &str) -> Vec<FlatDeparture> {
             .and_then(|b| xml_lang_text(b))
             .unwrap_or_default();
 
+        let train_number = xml_text(service_block, "TrainNumber");
+
         // --- ThisCall > CallAtStop (departure time, platform) ---
         let this_call_blocks = xml_blocks(stop_event_block, "ThisCall");
         let call_block = this_call_blocks
@@ -175,6 +179,7 @@ fn parse_stop_events(xml: &str) -> Vec<FlatDeparture> {
             delay,
             platform: estimated_quay.unwrap_or(planned_quay),
             platform_changed,
+            train_number,
         });
     }
 
