@@ -17,6 +17,7 @@ pub struct NearbyQuery {
     lat: Option<f64>,
     lon: Option<f64>,
     query: Option<String>,
+    mode: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -65,6 +66,7 @@ pub async fn handle_nearby(
     };
 
     let query_lower = params.query.map(|q| q.to_lowercase());
+    let requested_mode = params.mode;
 
     // ~5km bounding box in degrees
     let dlat = MAX_DISTANCE / 111000.0;
@@ -141,11 +143,15 @@ pub async fn handle_nearby(
         group.truncate(MAX_PER_MODE);
     }
 
-    // Fetch departures for only the default station (first available mode's closest)
+    // Fetch departures for the default station — prioritize requested mode, then fall back
     let dep_limit = 20u32;
-    let default_id = [&train, &bus, &tram, &special]
-        .iter()
-        .find_map(|g| g.first().map(|s| s.0.clone()));
+    let ordered: Vec<&Vec<(String, String, i64, f64, f64)>> = match requested_mode.as_deref() {
+        Some("bus") => vec![&bus, &train, &tram, &special],
+        Some("tram") => vec![&tram, &train, &bus, &special],
+        Some("special") => vec![&special, &train, &bus, &tram],
+        _ => vec![&train, &bus, &tram, &special],
+    };
+    let default_id = ordered.iter().find_map(|g| g.first().map(|s| s.0.clone()));
 
     let mut departure_map: std::collections::HashMap<String, Vec<FlatDeparture>> =
         std::collections::HashMap::new();
