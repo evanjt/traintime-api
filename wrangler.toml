@@ -1,6 +1,8 @@
 name = "traintime-api"
 main = "build/index.js"
 compatibility_date = "2026-03-14"
+workers_dev = false
+preview_urls = false
 
 [build]
 command = "export PATH=\"$HOME/.cargo/bin:$PATH\" && command -v cargo >/dev/null || curl -sSf https://sh.rustup.rs | sh -s -- -y -q 2>/dev/null && export PATH=\"$HOME/.cargo/bin:$PATH\" && rustup target add wasm32-unknown-unknown 2>/dev/null && cargo install -q \"worker-build@^0.7\" && worker-build --release"
