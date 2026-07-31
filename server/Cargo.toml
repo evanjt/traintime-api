@@ -1,0 +1,31 @@
+[package]
+name = "traintime-server"
+version = "0.1.0"
+edition = "2021"
+authors = ["Evan Thomas <evan@evanjt.com>"]
+description = "Native HTTP server build of traintime-api, for self-hosting"
+publish = false
+
+# Own workspace root. Do not remove — see core/Cargo.toml.
+[workspace]
+
+[[bin]]
+name = "traintime-server"
+path = "src/main.rs"
+
+[dependencies]
+traintime-core = { path = "../core" }
+
+axum = { version = "0.8", features = ["json", "query"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "http2", "charset"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std", "alloc"] }
+
+# Deliberately no panic = "abort": a panicking handler should return 500, not
+# take the whole pod down.
+[profile.release]
+lto = true
+strip = true
+codegen-units = 1

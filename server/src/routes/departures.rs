@@ -3,11 +3,11 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
 use serde::Deserialize;
-use worker::console_log;
 
-use crate::ojp::{fetch_departures, FlatDeparture};
-use crate::AppState;
+use crate::ojp::fetch_departures;
+use crate::state::AppState;
 use traintime_core::favourites::{parse_favourites, partition_favourites};
+use traintime_core::ojp::FlatDeparture;
 
 #[derive(Deserialize)]
 pub struct DeparturesQuery {
@@ -16,7 +16,6 @@ pub struct DeparturesQuery {
     favourites: Option<String>,
 }
 
-#[worker::send]
 pub async fn handle_departures(
     State(state): State<AppState>,
     Query(params): Query<DeparturesQuery>,
@@ -43,9 +42,8 @@ pub async fn handle_departures(
     let fetch_limit = 50u32;
     let cache_key = format!("departures:{station_id}:{fetch_limit}");
 
-    // Check cache
-    if let Ok(Some(cached)) = state.cache.get(&cache_key).text().await {
-        console_log!("CACHE HIT {}", cache_key);
+    if let Some(cached) = state.cache.get(&cache_key) {
+        println!("CACHE HIT {cache_key}");
         if let Ok(departures) = serde_json::from_str::<Vec<FlatDeparture>>(&cached) {
             if has_favourites {
                 let (favs, deps) = partition_favourites(&departures, &fav_pairs, limit as usize);
@@ -63,18 +61,11 @@ pub async fn handle_departures(
         }
     }
 
-    console_log!("CACHE MISS {}", cache_key);
-    match fetch_departures(&state.ojp_api_key, &station_id, fetch_limit).await {
+    println!("CACHE MISS {cache_key}");
+    match fetch_departures(&state.http, &state.ojp_api_key, &station_id, fetch_limit).await {
         Ok(departures) => {
-            // Cache the full result
             if let Ok(json_str) = serde_json::to_string(&departures) {
-                let _ = state
-                    .cache
-                    .put(&cache_key, &json_str)
-                    .unwrap()
-                    .expiration_ttl(state.cache_ttl)
-                    .execute()
-                    .await;
+                state.cache.put(&cache_key, &json_str, state.cache_ttl);
             }
 
             if has_favourites {
@@ -94,7 +85,7 @@ pub async fn handle_departures(
         }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
+            Json(serde_json::json!({ "error": e })),
         ),
     }
 }

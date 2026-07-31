@@ -2,15 +2,14 @@ use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use wasm_bindgen::JsValue;
 use worker::console_log;
 
-use crate::ojp::{fetch_departures, FlatDeparture};
+use crate::ojp::fetch_departures;
 use crate::AppState;
-
-const MAX_PER_MODE: usize = 5;
-const MAX_DISTANCE: f64 = 5000.0;
+use traintime_core::geo::bounding_box;
+use traintime_core::stations::{default_station_id, group_nearby, Station};
 
 #[derive(Deserialize)]
 pub struct NearbyQuery {
@@ -18,36 +17,6 @@ pub struct NearbyQuery {
     lon: Option<f64>,
     query: Option<String>,
     mode: Option<String>,
-}
-
-#[derive(Serialize)]
-struct NearbyStation {
-    id: String,
-    name: String,
-    dist: i64,
-    lat: f64,
-    lon: f64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    departures: Option<Vec<FlatDeparture>>,
-}
-
-#[derive(Deserialize)]
-struct StationRow {
-    id: String,
-    name: String,
-    lat: f64,
-    lon: f64,
-    mode: String,
-}
-
-fn haversine_distance(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
-    const R: f64 = 6371000.0;
-    let to_rad = |deg: f64| deg * std::f64::consts::PI / 180.0;
-    let d_lat = to_rad(lat2 - lat1);
-    let d_lon = to_rad(lon2 - lon1);
-    let a = (d_lat / 2.0).sin().powi(2)
-        + to_rad(lat1).cos() * to_rad(lat2).cos() * (d_lon / 2.0).sin().powi(2);
-    R * 2.0 * a.sqrt().atan2((1.0 - a).sqrt())
 }
 
 #[worker::send]
@@ -68,14 +37,7 @@ pub async fn handle_nearby(
     let query_lower = params.query.map(|q| q.to_lowercase());
     let requested_mode = params.mode;
 
-    // ~5km bounding box in degrees
-    let dlat = MAX_DISTANCE / 111000.0;
-    let dlon = MAX_DISTANCE / 75700.0;
-
-    let lat_min = lat - dlat;
-    let lat_max = lat + dlat;
-    let lon_min = lon - dlon;
-    let lon_max = lon + dlon;
+    let (lat_min, lat_max, lon_min, lon_max) = bounding_box(lat, lon);
 
     let bound = if let Some(ref q) = query_lower {
         let pattern = format!("%{q}%");
@@ -98,8 +60,8 @@ pub async fn handle_nearby(
         }
     };
 
-    let rows: Vec<StationRow> = match stmt.all().await {
-        Ok(r) => match r.results::<StationRow>() {
+    let rows: Vec<Station> = match stmt.all().await {
+        Ok(r) => match r.results::<Station>() {
             Ok(rows) => rows,
             Err(e) => {
                 return (
@@ -116,58 +78,26 @@ pub async fn handle_nearby(
         }
     };
 
-    let mut train: Vec<(String, String, i64, f64, f64)> = Vec::new();
-    let mut bus: Vec<(String, String, i64, f64, f64)> = Vec::new();
-    let mut tram: Vec<(String, String, i64, f64, f64)> = Vec::new();
-    let mut special: Vec<(String, String, i64, f64, f64)> = Vec::new();
-
-    for row in rows {
-        let dist = haversine_distance(lat, lon, row.lat, row.lon);
-        if dist > MAX_DISTANCE {
-            continue;
-        }
-
-        let entry = (row.id, row.name, dist.round() as i64, row.lat, row.lon);
-
-        match row.mode.as_str() {
-            "bus" => bus.push(entry),
-            "tram" => tram.push(entry),
-            "special" => special.push(entry),
-            _ => train.push(entry),
-        }
-    }
-
-    // Sort by distance and limit
-    for group in [&mut train, &mut bus, &mut tram, &mut special] {
-        group.sort_by_key(|e| e.2);
-        group.truncate(MAX_PER_MODE);
-    }
+    let mut groups = group_nearby(rows.iter(), lat, lon);
 
     // Fetch departures for the default station — prioritize requested mode, then fall back
-    let dep_limit = 20u32;
-    let ordered: Vec<&Vec<(String, String, i64, f64, f64)>> = match requested_mode.as_deref() {
-        Some("bus") => vec![&bus, &train, &tram, &special],
-        Some("tram") => vec![&tram, &train, &bus, &special],
-        Some("special") => vec![&special, &train, &bus, &tram],
-        _ => vec![&train, &bus, &tram, &special],
-    };
-    let default_id = ordered.iter().find_map(|g| g.first().map(|s| s.0.clone()));
-
-    let mut departure_map: std::collections::HashMap<String, Vec<FlatDeparture>> =
-        std::collections::HashMap::new();
+    // Fetch 50 to share cache key with /v1/departures, but only embed first 20 in response
+    let fetch_limit = 50u32;
+    let embed_limit = 20usize;
+    let default_id = default_station_id(&groups, requested_mode.as_deref());
 
     if let Some(id) = default_id {
-        let cache_key = format!("departures:{id}:{dep_limit}");
-        let mut deps: Option<Vec<FlatDeparture>> = None;
+        let cache_key = format!("departures:{id}:{fetch_limit}");
+        let mut deps = None;
 
         if let Ok(Some(cached)) = state.cache.get(&cache_key).text().await {
-            console_log!("CACHE HIT departures:{}:{}", id, dep_limit);
+            console_log!("CACHE HIT departures:{}:{}", id, fetch_limit);
             deps = serde_json::from_str(&cached).ok();
         }
 
         if deps.is_none() {
-            console_log!("CACHE MISS departures:{}:{}", id, dep_limit);
-            if let Ok(fetched) = fetch_departures(&state.ojp_api_key, &id, dep_limit).await {
+            console_log!("CACHE MISS departures:{}:{}", id, fetch_limit);
+            if let Ok(fetched) = fetch_departures(&state.ojp_api_key, &id, fetch_limit).await {
                 if let Ok(json_str) = serde_json::to_string(&fetched) {
                     let _ = state
                         .cache
@@ -181,31 +111,19 @@ pub async fn handle_nearby(
             }
         }
 
-        if let Some(d) = deps {
-            departure_map.insert(id, d);
+        if let Some(mut d) = deps {
+            d.truncate(embed_limit);
+            groups.attach_departures(&id, d);
         }
     }
-
-    let to_response = |list: &[(String, String, i64, f64, f64)]| -> Vec<NearbyStation> {
-        list.iter()
-            .map(|(id, name, dist, lat, lon)| NearbyStation {
-                id: id.clone(),
-                name: name.clone(),
-                dist: *dist,
-                lat: *lat,
-                lon: *lon,
-                departures: departure_map.get(id).cloned(),
-            })
-            .collect()
-    };
 
     (
         StatusCode::OK,
         Json(serde_json::json!({
-            "train": to_response(&train),
-            "bus": to_response(&bus),
-            "tram": to_response(&tram),
-            "special": to_response(&special),
+            "train": groups.train,
+            "bus": groups.bus,
+            "tram": groups.tram,
+            "special": groups.special,
         })),
     )
 }

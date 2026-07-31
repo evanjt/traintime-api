@@ -687,9 +687,19 @@ dependencies = [
  "serde",
  "serde_json",
  "tower-service",
+ "traintime-core",
  "wasm-bindgen",
  "worker",
  "worker-macros",
+]
+
+[[package]]
+name = "traintime-core"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

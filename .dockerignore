@@ -1,0 +1,13 @@
+.git
+.github
+target
+core/target
+server/target
+build
+.wrangler
+node_modules
+.dev.vars
+migrations
+scripts
+tests
+README.md

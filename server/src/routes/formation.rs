@@ -3,10 +3,9 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
 use serde::Deserialize;
-use worker::console_log;
 
 use crate::formation::fetch_formation;
-use crate::AppState;
+use crate::state::AppState;
 use traintime_core::formation::{extract_train_number, operator_ref_to_evu};
 
 const FORMATION_CACHE_TTL: u64 = 300;
@@ -21,7 +20,6 @@ pub struct FormationQuery {
     operator_ref: Option<String>,
 }
 
-#[worker::send]
 pub async fn handle_formation(
     State(state): State<AppState>,
     Query(params): Query<FormationQuery>,
@@ -72,16 +70,16 @@ pub async fn handle_formation(
     let stop_key = params.stop.as_deref().unwrap_or("all");
     let cache_key = format!("formation:{evu}:{date}:{train_number}:{stop_key}");
 
-    // Check cache
-    if let Ok(Some(cached)) = state.cache.get(&cache_key).text().await {
-        console_log!("CACHE HIT {}", cache_key);
+    if let Some(cached) = state.cache.get(&cache_key) {
+        println!("CACHE HIT {cache_key}");
         if let Ok(result) = serde_json::from_str::<serde_json::Value>(&cached) {
             return (StatusCode::OK, Json(result));
         }
     }
 
-    console_log!("CACHE MISS {}", cache_key);
+    println!("CACHE MISS {cache_key}");
     match fetch_formation(
+        &state.http,
         &state.formation_api_key,
         &evu,
         &date,
@@ -92,20 +90,13 @@ pub async fn handle_formation(
     {
         Ok(result) => {
             let json_val = serde_json::to_value(&result).unwrap_or_default();
-            // Cache the result
             if let Ok(json_str) = serde_json::to_string(&json_val) {
-                let _ = state
-                    .cache
-                    .put(&cache_key, &json_str)
-                    .unwrap()
-                    .expiration_ttl(FORMATION_CACHE_TTL)
-                    .execute()
-                    .await;
+                state.cache.put(&cache_key, &json_str, FORMATION_CACHE_TTL);
             }
             (StatusCode::OK, Json(json_val))
         }
         Err(e) => {
-            console_log!("Formation error: {}", e);
+            println!("Formation error: {e}");
             (
                 StatusCode::NOT_FOUND,
                 Json(serde_json::json!({ "error": "No formation data" })),

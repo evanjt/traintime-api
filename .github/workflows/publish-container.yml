@@ -1,0 +1,119 @@
+name: CI
+
+# Build the container from the repo root context (server/Dockerfile needs core/,
+# server/ and data/), push to GHCR, sign with cosign, then dispatch a manifest
+# update to the k8s repo.
+# Secrets used: CD_TOKEN, CD_URI, CD_ORG, CD_REPO
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'core/**'
+      - 'server/**'
+      - 'data/**'
+      - '.github/workflows/publish-container.yml'
+  pull_request:
+    paths:
+      - 'core/**'
+      - 'server/**'
+      - 'src/**'
+      - 'Cargo.toml'
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # Guards the Cloudflare Worker: core/ must keep compiling to wasm, so a
+  # native-only dependency creeping in fails here rather than in Cloudflare's
+  # builder, where it would block deploys of api.traintime.ch.
+  worker-builds:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Add wasm target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Build Worker for wasm32
+        run: cargo build --release --target wasm32-unknown-unknown
+
+      - name: Test core
+        run: cargo test --manifest-path core/Cargo.toml
+
+  build:
+    if: github.event_name != 'pull_request'
+    needs: worker-builds
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    outputs:
+      digest: ${{ steps.build-and-push.outputs.digest }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3.3.0
+        with:
+          cosign-release: 'v2.2.2'
+
+      - name: Setup Docker buildx
+        uses: docker/setup-buildx-action@79abd3f86f79a9d68a23c75a09a9a85889262adf
+
+      - name: Log into registry ${{ env.REGISTRY }}
+        uses: docker/login-action@28218f9b04b4f3f62068d7b6ce6ca5b26e35336c
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@98669ae865ea3cffbcbaa878cf57c20bbf1c6c38
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+
+      - name: Build and push Docker image
+        id: build-and-push
+        uses: docker/build-push-action@ac9327eae2b366085ac7f6a2d02df8aa8ead720a
+        with:
+          context: .
+          file: ./server/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Sign the published Docker image
+        env:
+          COSIGN_EXPERIMENTAL: "true"
+        run: echo "${{ steps.meta.outputs.tags }}" | xargs -I {} cosign sign --yes {}@${{ steps.build-and-push.outputs.digest }}
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch manifest update
+        run: |
+          curl -fsSL -X POST \
+            -H "Authorization: Bearer ${{ secrets.CD_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            ${{ secrets.CD_URI }} \
+            -d '{
+              "event_type": "update-manifest",
+              "client_payload": {
+                "digest":    "${{ needs.build.outputs.digest }}",
+                "repo_name": "${{ secrets.CD_REPO }}",
+                "repo_org":  "${{ secrets.CD_ORG }}",
+                "branch":    "prod"
+              }
+            }'

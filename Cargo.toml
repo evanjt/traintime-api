@@ -8,6 +8,7 @@ authors = ["Evan Thomas <evan@evanjt.com>"]
 crate-type = ["cdylib"]
 
 [dependencies]
+traintime-core = { path = "core" }
 worker = { version = "0.7", features = ['http', 'axum', 'd1'] }
 worker-macros = { version = "0.7", features = ['http'] }
 axum = { version = "0.8", default-features = false, features = ["json", "query"] }
