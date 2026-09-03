@@ -3,8 +3,8 @@
 //! catch drift, so update them only alongside a deliberate behaviour change.
 
 use traintime_core::{
-    parse_favourites, parse_formation_short_string, parse_stop_events, partition_favourites,
-    FlatDeparture,
+    operator_ref_to_evu, parse_favourites, parse_formation_short_string, parse_stop_events,
+    partition_favourites, FlatDeparture,
 };
 
 fn wagon_tuple(w: &traintime_core::Wagon) -> (usize, u32, u8, &str, Vec<&str>, bool) {
@@ -197,4 +197,12 @@ fn departure(number: &str, to: &str, departure: i64) -> FlatDeparture {
         train_number: None,
         operator_ref: None,
     }
+}
+
+#[test]
+fn operator_ref_accepts_namespaced_form() {
+    assert_eq!(operator_ref_to_evu("11"), Some("SBBP"));
+    assert_eq!(operator_ref_to_evu("ojp:11"), Some("SBBP"));
+    assert_eq!(operator_ref_to_evu("ojp:33"), Some("BLSP"));
+    assert_eq!(operator_ref_to_evu("ojp:74"), None);
 }

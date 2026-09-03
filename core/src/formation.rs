@@ -32,7 +32,9 @@ pub fn extract_train_number(raw: &str) -> String {
 /// Map OJP OperatorRef numeric code to formation API EVU code.
 /// See https://api.opentransportdata.swiss/formation/v1 for supported EVUs.
 pub fn operator_ref_to_evu(op_ref: &str) -> Option<&'static str> {
-    match op_ref {
+    // OJP started prefixing refs with a namespace ("ojp:11") in 2026.
+    let code = op_ref.rsplit(':').next().unwrap_or(op_ref);
+    match code {
         "11" => Some("SBBP"),   // SBB
         "33" => Some("BLSP"),   // BLS
         "65" => Some("THURBO"), // Thurbo
