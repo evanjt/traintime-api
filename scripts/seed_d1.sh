@@ -1,19 +1,25 @@
 #!/bin/bash
-# Seed D1 from stations.json
+# Sync D1 to data/stations.json, writing only the rows that differ.
+set -euo pipefail
+
 cd "$(dirname "$0")/.."
-python3 -c "
-import json
-with open('data/stations.json') as f:
-    stations = json.load(f)
-print('DELETE FROM stations;')
-# Write in batches of 500
-for i in range(0, len(stations), 500):
-    batch = stations[i:i+500]
-    values = ','.join(
-        f\"('{s['id']}','{s['name'].replace(chr(39), chr(39)+chr(39))}',{s['lat']},{s['lon']},'{s['mode']}')\"
-        for s in batch
-    )
-    print(f'INSERT INTO stations (id, name, lat, lon, mode) VALUES {values};')
-" > /tmp/seed_stations.sql
-npx wrangler d1 execute traintime-stations --remote --file=/tmp/seed_stations.sql
-echo "Seeded $(wc -l < /tmp/seed_stations.sql) batches"
+
+DB="traintime-stations"
+# Set D1_TARGET=--local to rehearse against a local database.
+TARGET="${D1_TARGET:---remote}"
+CURRENT=$(mktemp)
+SQL=$(mktemp)
+trap 'rm -f "$CURRENT" "$SQL"' EXIT
+
+echo "Reading current rows from D1..."
+npx wrangler d1 execute "$DB" "$TARGET" --json \
+  --command "SELECT id, name, lat, lon, mode FROM stations" > "$CURRENT"
+
+python3 scripts/diff_stations.py "$CURRENT" data/stations.json > "$SQL"
+
+if [ ! -s "$SQL" ]; then
+  echo "D1 already matches data/stations.json"
+  exit 0
+fi
+
+npx wrangler d1 execute "$DB" "$TARGET" --file="$SQL"
