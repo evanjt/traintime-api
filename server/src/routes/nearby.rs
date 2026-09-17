@@ -51,7 +51,7 @@ pub async fn handle_nearby(
         let fetched = state
             .inflight
             .cached(&state.cache, &cache_key, state.cache_ttl, || async {
-                let deps = fetch_departures(&state.http, &state.ojp_api_key, &id, fetch_limit).await?;
+                let deps = fetch_departures(&state.http, &state.ojp_endpoint, &state.ojp_api_key, &id, fetch_limit).await?;
                 serde_json::to_string(&deps).map_err(|e| e.to_string())
             })
             .await;

@@ -1,6 +1,4 @@
-use traintime_core::ojp::{
-    build_stop_event_request_xml, parse_stop_events, FlatDeparture, OJP_ENDPOINT,
-};
+use traintime_core::ojp::{build_stop_event_request_xml, parse_stop_events, FlatDeparture};
 
 /// Parse ISO timestamp string to unix milliseconds.
 ///
@@ -21,6 +19,7 @@ fn iso_to_ms(iso: &str) -> f64 {
 
 pub async fn fetch_departures(
     http: &reqwest::Client,
+    endpoint: &str,
     api_key: &str,
     stop_ref: &str,
     limit: u32,
@@ -36,7 +35,7 @@ pub async fn fetch_departures(
     let start = std::time::Instant::now();
 
     let resp = http
-        .post(OJP_ENDPOINT)
+        .post(endpoint)
         .header("Content-Type", "application/xml")
         .header("Authorization", format!("Bearer {api_key}"))
         .body(body)
@@ -58,4 +57,44 @@ pub async fn fetch_departures(
 
     let xml = resp.text().await.map_err(|e| e.to_string())?;
     Ok(parse_stop_events(&xml, iso_to_ms))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::routing::post;
+    use axum::Router;
+
+    const STOP_EVENT_XML: &str = r#"<OJP><StopEventResult><StopEvent>
+      <ThisCall><CallAtStop>
+        <ServiceDeparture><TimetabledTime>2026-09-17T10:00:00Z</TimetabledTime></ServiceDeparture>
+        <PlannedQuay><Text>7</Text></PlannedQuay>
+      </CallAtStop></ThisCall>
+      <Service>
+        <Mode><ShortName><Text>IC</Text></ShortName></Mode>
+        <PublishedServiceName><Text>IC1</Text></PublishedServiceName>
+        <DestinationText><Text>Bern</Text></DestinationText>
+      </Service>
+    </StopEvent></StopEventResult></OJP>"#;
+
+    // Scenario: a load test points OJP_ENDPOINT at a stub so SBB's per-key
+    // limit is never touched. Expected behaviour: the server posts to the
+    // override, not the built-in endpoint, and parses what it gets back.
+    #[tokio::test]
+    async fn fetch_departures_posts_to_the_endpoint_override() {
+        let app = Router::new().route("/ojp20", post(|| async { STOP_EVENT_XML }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let http = reqwest::Client::new();
+        let endpoint = format!("http://{addr}/ojp20");
+        let deps = fetch_departures(&http, &endpoint, "key", "8507000", 5)
+            .await
+            .unwrap();
+
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].to, "Bern");
+        assert_eq!(deps[0].number, "IC1");
+    }
 }

@@ -165,7 +165,11 @@ async fn run() -> Result<(), String> {
     // Fail fast: a missing or malformed dataset should crash-loop and leave the
     // previous ReplicaSet serving, not quietly return empty /v1/nearby results.
     let db = Stations::load(&stations_path)?;
-    println!("loaded {} stations from {}", db.len(), stations_path.display());
+    println!(
+        "loaded {} stations from {}",
+        db.len(),
+        stations_path.display()
+    );
 
     let state = AppState {
         cache: Cache::default(),
@@ -178,6 +182,8 @@ async fn run() -> Result<(), String> {
             .pool_idle_timeout(Duration::from_secs(90))
             .build()
             .map_err(|e| e.to_string())?,
+        ojp_endpoint: std::env::var("OJP_ENDPOINT")
+            .unwrap_or_else(|_| traintime_core::ojp::OJP_ENDPOINT.to_string()),
         ojp_api_key: required_env("OJP_API_KEY")?,
         formation_api_key: required_env("FORMATION_API_KEY")?,
         cache_ttl: std::env::var("DEPARTURE_CACHE_TTL")
