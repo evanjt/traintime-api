@@ -35,5 +35,11 @@ binding = "DB"
 database_name = "traintime-stations"
 database_id = "6f77d13d-6731-4b46-b0f7-177a7eeb6aa1"
 
+# Our own console_log lines only. invocation_logs = false keeps Cloudflare from
+# recording the request URL (lat/lon in the query) and client IP per request.
 [observability]
-enabled = false
+enabled = true
+head_sampling_rate = 0.2
+
+[observability.logs]
+invocation_logs = false

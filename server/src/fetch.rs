@@ -4,14 +4,28 @@ use std::sync::Arc;
 
 use tokio::sync::{Mutex, Notify};
 
+use traintime_core::CacheStatus;
+
 use crate::cache::{Cache, STALE_MAX_AGE};
 
 /// What a route got back for a cache key.
 pub enum Fetched {
+    /// Served from the cache, fetched by an earlier request.
+    Cached(String),
+    /// Fetched upstream by this request.
     Fresh(String),
     /// Upstream failed, this is the last good payload and its age in seconds.
     Stale(String, u64),
     Failed(String),
+}
+
+impl Fetched {
+    pub fn cache_status(&self) -> CacheStatus {
+        match self {
+            Fetched::Cached(_) | Fetched::Stale(_, _) => CacheStatus::Hit,
+            Fetched::Fresh(_) | Fetched::Failed(_) => CacheStatus::Miss,
+        }
+    }
 }
 
 /// One upstream call per cache key per pod. Concurrent misses wait for the
@@ -28,7 +42,7 @@ impl Inflight {
         Fut: Future<Output = Result<String, String>>,
     {
         if let Some(v) = cache.get(key) {
-            return Fetched::Fresh(v);
+            return Fetched::Cached(v);
         }
         let mut keys = self.keys.lock().await;
         if let Some(notify) = keys.get(key).cloned() {
@@ -58,7 +72,7 @@ impl Inflight {
 
 fn from_cache(cache: &Cache, key: &str, error: String) -> Fetched {
     if let Some(v) = cache.get(key) {
-        return Fetched::Fresh(v);
+        return Fetched::Cached(v);
     }
     match cache.get_stale(key, STALE_MAX_AGE) {
         Some((v, age)) => Fetched::Stale(v, age),
@@ -92,7 +106,7 @@ mod tests {
             })
             .collect();
         for t in tasks {
-            assert!(matches!(t.await.unwrap(), Fetched::Fresh(v) if v == "v"));
+            assert!(matches!(t.await.unwrap(), Fetched::Fresh(v) | Fetched::Cached(v) if v == "v"));
         }
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     }

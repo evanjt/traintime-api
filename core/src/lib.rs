@@ -12,6 +12,7 @@ pub mod favourites;
 pub mod formation;
 pub mod geo;
 pub mod ojp;
+pub mod reqlog;
 pub mod stations;
 
 pub use auth::ApiKeys;
@@ -23,6 +24,7 @@ pub use formation::{
     parse_formation_short_string, FormationResult, Wagon, FORMATION_ENDPOINT,
 };
 pub use geo::{bounding_box, haversine_distance, MAX_DISTANCE, MAX_PER_MODE};
+pub use reqlog::{format_line, route_template, CacheStatus};
 pub use ojp::{
     build_stop_event_request_xml, parse_stop_events, FlatDeparture, OJP_ENDPOINT,
 };

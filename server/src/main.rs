@@ -18,7 +18,7 @@ mod routes;
 mod state;
 mod stations;
 
-use traintime_core::ApiKeys;
+use traintime_core::{auth, format_line, ApiKeys, CacheStatus};
 
 use cache::Cache;
 use state::AppState;
@@ -36,6 +36,7 @@ async fn fallback() -> (StatusCode, Json<serde_json::Value>) {
 }
 
 /// Fail-closed x-api-key check, skipped for /health so it stays probe-usable.
+/// Also writes the one request line. Never the query string: see core::reqlog.
 async fn auth(
     axum::extract::State(state): axum::extract::State<AppState>,
     req: Request,
@@ -45,25 +46,62 @@ async fn auth(
         return with_cors(StatusCode::NO_CONTENT.into_response());
     }
 
-    if req.uri().path() != "/health" {
+    let started = std::time::Instant::now();
+    let method = req.method().to_string();
+    let path = req.uri().path().to_string();
+    let mut key_label: Option<String> = None;
+
+    if path != "/health" {
         let provided = req
             .headers()
             .get("x-api-key")
             .and_then(|v| v.to_str().ok())
             .unwrap_or_default();
 
-        if state.api_keys.matched(provided).is_none() {
-            return with_cors(
-                (
-                    StatusCode::UNAUTHORIZED,
-                    Json(serde_json::json!({ "error": "Unauthorized" })),
-                )
-                    .into_response(),
-            );
+        match state.api_keys.matched(provided) {
+            Some(key) => key_label = Some(auth::label(key).to_string()),
+            None => {
+                let resp = with_cors(
+                    (
+                        StatusCode::UNAUTHORIZED,
+                        Json(serde_json::json!({ "error": "Unauthorized" })),
+                    )
+                        .into_response(),
+                );
+                log_request(&method, &path, &resp, started, None);
+                return resp;
+            }
         }
     }
 
-    with_cors(next.run(req).await)
+    let resp = with_cors(next.run(req).await);
+    log_request(&method, &path, &resp, started, key_label.as_deref());
+    resp
+}
+
+fn log_request(
+    method: &str,
+    path: &str,
+    resp: &Response,
+    started: std::time::Instant,
+    key: Option<&str>,
+) {
+    let cache = resp
+        .extensions()
+        .get::<CacheStatus>()
+        .copied()
+        .unwrap_or_default();
+    println!(
+        "{}",
+        format_line(
+            method,
+            path,
+            resp.status().as_u16(),
+            started.elapsed().as_millis() as u64,
+            cache,
+            key,
+        )
+    );
 }
 
 fn with_cors(mut resp: Response) -> Response {

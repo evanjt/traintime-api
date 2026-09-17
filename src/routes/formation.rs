@@ -2,6 +2,7 @@ use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::Response;
 use serde::Deserialize;
+use traintime_core::CacheStatus;
 use worker::console_log;
 
 use crate::cache::{self, Cached};
@@ -32,9 +33,7 @@ pub async fn handle_formation(
         _ => {
             return respond(
                 StatusCode::BAD_REQUEST,
-                serde_json::json!({ "error": "Missing train parameter" }),
-                None,
-            );
+                serde_json::json!({ "error": "Missing train parameter" }), None, CacheStatus::None);
         }
     };
 
@@ -43,9 +42,7 @@ pub async fn handle_formation(
         _ => {
             return respond(
                 StatusCode::BAD_REQUEST,
-                serde_json::json!({ "error": "Missing date parameter" }),
-                None,
-            );
+                serde_json::json!({ "error": "Missing date parameter" }), None, CacheStatus::None);
         }
     };
 
@@ -53,9 +50,7 @@ pub async fn handle_formation(
     if train_number.is_empty() {
         return respond(
             StatusCode::BAD_REQUEST,
-            serde_json::json!({ "error": "Invalid train number" }),
-            None,
-        );
+            serde_json::json!({ "error": "Invalid train number" }), None, CacheStatus::None);
     }
 
     let evu = if let Some(ref e) = params.evu {
@@ -66,9 +61,7 @@ pub async fn handle_formation(
             None => {
                 return respond(
                     StatusCode::NOT_FOUND,
-                    serde_json::json!({ "error": "No formation data" }),
-                    None,
-                );
+                    serde_json::json!({ "error": "No formation data" }), None, CacheStatus::None);
             }
         }
     } else {
@@ -77,13 +70,16 @@ pub async fn handle_formation(
     let stop_key = params.stop.as_deref().unwrap_or("all");
     let cache_key = format!("formation:{evu}:{date}:{train_number}:{stop_key}");
 
+    let mut cache;
     let (json, stale) = match cache::get(&state.cache, &cache_key, FORMATION_CACHE_TTL).await {
         Cached::Fresh(v) => {
             console_log!("CACHE HIT {}", cache_key);
+            cache = CacheStatus::Hit;
             (v, None)
         }
         cached => {
             console_log!("CACHE MISS {}", cache_key);
+            cache = CacheStatus::Miss;
             match fetch_formation(
                 &state.formation_api_key,
                 &evu,
@@ -101,26 +97,23 @@ pub async fn handle_formation(
                 Err(e) => match cached {
                     Cached::Stale(v, age) => {
                         console_log!("STALE {} {}s: {}", cache_key, age, e);
+                        cache = CacheStatus::Hit;
                         (v, Some(age))
                     }
                     _ => {
                         console_log!("Formation error: {}", e);
                         return respond(
                             StatusCode::NOT_FOUND,
-                            serde_json::json!({ "error": "No formation data" }),
-                            None,
-                        );
+                            serde_json::json!({ "error": "No formation data" }), None, cache);
                     }
                 },
             }
         }
     };
     match serde_json::from_str::<serde_json::Value>(&json) {
-        Ok(v) => respond(StatusCode::OK, v, stale),
+        Ok(v) => respond(StatusCode::OK, v, stale, cache),
         Err(e) => respond(
             StatusCode::INTERNAL_SERVER_ERROR,
-            serde_json::json!({ "error": e.to_string() }),
-            None,
-        ),
+            serde_json::json!({ "error": e.to_string() }), None, cache),
     }
 }

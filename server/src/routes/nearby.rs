@@ -2,6 +2,7 @@ use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::Response;
 use serde::Deserialize;
+use traintime_core::CacheStatus;
 
 use crate::fetch::Fetched;
 use crate::ojp::fetch_departures;
@@ -27,9 +28,7 @@ pub async fn handle_nearby(
         _ => {
             return respond(
                 StatusCode::BAD_REQUEST,
-                serde_json::json!({ "error": "Missing or invalid lat/lon parameters" }),
-                None,
-            );
+                serde_json::json!({ "error": "Missing or invalid lat/lon parameters" }), None, CacheStatus::None);
         }
     };
 
@@ -46,6 +45,7 @@ pub async fn handle_nearby(
     let default_id = default_station_id(&groups, requested_mode.as_deref());
 
     let mut stale = None;
+    let mut cache = CacheStatus::None;
     if let Some(id) = default_id {
         let cache_key = format!("departures:{id}:{fetch_limit}");
         let fetched = state
@@ -55,8 +55,9 @@ pub async fn handle_nearby(
                 serde_json::to_string(&deps).map_err(|e| e.to_string())
             })
             .await;
+        cache = fetched.cache_status();
         let json = match fetched {
-            Fetched::Fresh(v) => Some(v),
+            Fetched::Fresh(v) | Fetched::Cached(v) => Some(v),
             Fetched::Stale(v, age) => {
                 stale = Some(age);
                 Some(v)
@@ -76,7 +77,5 @@ pub async fn handle_nearby(
             "bus": groups.bus,
             "tram": groups.tram,
             "special": groups.special,
-        }),
-        stale,
-    )
+        }), stale, cache)
 }

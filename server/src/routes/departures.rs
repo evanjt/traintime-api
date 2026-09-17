@@ -2,6 +2,7 @@ use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::Response;
 use serde::Deserialize;
+use traintime_core::CacheStatus;
 
 use crate::fetch::Fetched;
 use crate::ojp::fetch_departures;
@@ -26,9 +27,7 @@ pub async fn handle_departures(
         None => {
             return respond(
                 StatusCode::BAD_REQUEST,
-                serde_json::json!({ "error": "Missing id parameter" }),
-                None,
-            );
+                serde_json::json!({ "error": "Missing id parameter" }), None, CacheStatus::None);
         }
     };
 
@@ -50,28 +49,27 @@ pub async fn handle_departures(
             serde_json::to_string(&deps).map_err(|e| e.to_string())
         })
         .await;
+    let cache = fetched.cache_status();
     let (json, stale) = match fetched {
-        Fetched::Fresh(v) => (v, None),
+        Fetched::Fresh(v) | Fetched::Cached(v) => (v, None),
         Fetched::Stale(v, age) => (v, Some(age)),
         Fetched::Failed(e) => {
-            return respond(StatusCode::INTERNAL_SERVER_ERROR, serde_json::json!({ "error": e }), None);
+            return respond(StatusCode::INTERNAL_SERVER_ERROR, serde_json::json!({ "error": e }), None, cache);
         }
     };
     let departures: Vec<FlatDeparture> = match serde_json::from_str(&json) {
         Ok(d) => d,
         Err(e) => {
-            return respond(StatusCode::INTERNAL_SERVER_ERROR, serde_json::json!({ "error": e.to_string() }), None);
+            return respond(StatusCode::INTERNAL_SERVER_ERROR, serde_json::json!({ "error": e.to_string() }), None, cache);
         }
     };
     if has_favourites {
         let (favs, deps) = partition_favourites(&departures, &fav_pairs, limit as usize);
         return respond(
             StatusCode::OK,
-            serde_json::json!({ "favourites": favs, "departures": deps }),
-            stale,
-        );
+            serde_json::json!({ "favourites": favs, "departures": deps }), stale, cache);
     }
     let mut departures = departures;
     departures.truncate(limit as usize);
-    respond(StatusCode::OK, serde_json::json!({ "departures": departures }), stale)
+    respond(StatusCode::OK, serde_json::json!({ "departures": departures }), stale, cache)
 }

@@ -7,7 +7,7 @@ use tower_service::Service;
 use worker::kv::KvStore;
 use worker::*;
 
-use traintime_core::ApiKeys;
+use traintime_core::{auth, format_line, ApiKeys, CacheStatus};
 
 mod cache;
 mod formation;
@@ -47,6 +47,26 @@ async fn fallback() -> (StatusCode, Json<serde_json::Value>) {
     )
 }
 
+// The one request line. Never the URI with its query, see core::reqlog.
+fn log_request(method: &str, path: &str, resp: &AxumResponse, started: u64, key: Option<&str>) {
+    let cache = resp
+        .extensions()
+        .get::<CacheStatus>()
+        .copied()
+        .unwrap_or_default();
+    console_log!(
+        "{}",
+        format_line(
+            method,
+            path,
+            resp.status().as_u16(),
+            Date::now().as_millis().saturating_sub(started),
+            cache,
+            key,
+        )
+    );
+}
+
 fn add_cors_headers(resp: &mut AxumResponse) {
     let h = resp.headers_mut();
     h.insert("access-control-allow-origin", "*".parse().unwrap());
@@ -76,6 +96,9 @@ async fn fetch(req: HttpRequest, env: Env, _ctx: Context) -> Result<AxumResponse
         return Ok(resp);
     }
 
+    let started = Date::now().as_millis();
+    let mut key_label: Option<String> = None;
+
     // Auth check (skip /health)
     if path != "/health" {
         let provided_key = req
@@ -95,12 +118,11 @@ async fn fetch(req: HttpRequest, env: Env, _ctx: Context) -> Result<AxumResponse
                 .as_deref(),
         );
 
-        let authorized = match (&api_keys, provided_key) {
-            (Ok(keys), Some(provided)) => keys.matched(provided).is_some(),
-            _ => false,
-        };
+        if let (Ok(keys), Some(provided)) = (&api_keys, provided_key) {
+            key_label = keys.matched(provided).map(|k| auth::label(k).to_string());
+        }
 
-        if !authorized {
+        if key_label.is_none() {
             let mut resp = axum::http::Response::builder()
                 .status(401)
                 .header("content-type", "application/json")
@@ -110,6 +132,7 @@ async fn fetch(req: HttpRequest, env: Env, _ctx: Context) -> Result<AxumResponse
                 ))
                 .unwrap();
             add_cors_headers(&mut resp);
+            log_request(method.as_str(), &path, &resp, started, None);
             return Ok(resp);
         }
     }
@@ -143,6 +166,7 @@ async fn fetch(req: HttpRequest, env: Env, _ctx: Context) -> Result<AxumResponse
     match router(state).call(req).await {
         Ok(mut resp) => {
             add_cors_headers(&mut resp);
+            log_request(method.as_str(), &path, &resp, started, key_label.as_deref());
             Ok(resp)
         }
         Err(e) => {

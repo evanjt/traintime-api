@@ -2,6 +2,7 @@ use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::Response;
 use serde::Deserialize;
+use traintime_core::CacheStatus;
 use wasm_bindgen::JsValue;
 use worker::console_log;
 
@@ -30,9 +31,7 @@ pub async fn handle_nearby(
         _ => {
             return respond(
                 StatusCode::BAD_REQUEST,
-                serde_json::json!({ "error": "Missing or invalid lat/lon parameters" }),
-                None,
-            );
+                serde_json::json!({ "error": "Missing or invalid lat/lon parameters" }), None, CacheStatus::None);
         }
     };
 
@@ -53,9 +52,7 @@ pub async fn handle_nearby(
         Err(e) => {
             return respond(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                serde_json::json!({ "error": e.to_string() }),
-                None,
-            );
+                serde_json::json!({ "error": e.to_string() }), None, CacheStatus::None);
         }
     };
 
@@ -71,17 +68,13 @@ pub async fn handle_nearby(
             Err(e) => {
                 return respond(
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    serde_json::json!({ "error": e.to_string() }),
-                    None,
-                );
+                    serde_json::json!({ "error": e.to_string() }), None, CacheStatus::None);
             }
         },
         Err(e) => {
             return respond(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                serde_json::json!({ "error": e.to_string() }),
-                None,
-            );
+                serde_json::json!({ "error": e.to_string() }), None, CacheStatus::None);
         }
     };
 
@@ -94,15 +87,18 @@ pub async fn handle_nearby(
     let default_id = default_station_id(&groups, requested_mode.as_deref());
 
     let mut stale = None;
+    let mut cache = CacheStatus::None;
     if let Some(id) = default_id {
         let cache_key = format!("departures:{id}:{fetch_limit}");
         let json = match cache::get(&state.cache, &cache_key, state.cache_ttl).await {
             Cached::Fresh(v) => {
                 console_log!("CACHE HIT {}", cache_key);
+                cache = CacheStatus::Hit;
                 Some(v)
             }
             cached => {
                 console_log!("CACHE MISS {}", cache_key);
+                cache = CacheStatus::Miss;
                 match fetch_departures(&state.ojp_api_key, &id, fetch_limit).await {
                     Ok(fetched) => {
                         let json = serde_json::to_string(&fetched).unwrap_or_default();
@@ -112,6 +108,7 @@ pub async fn handle_nearby(
                     Err(e) => match cached {
                         Cached::Stale(v, age) => {
                             console_log!("STALE {} {}s: {}", cache_key, age, e);
+                            cache = CacheStatus::Hit;
                             stale = Some(age);
                             Some(v)
                         }
@@ -133,7 +130,5 @@ pub async fn handle_nearby(
             "bus": groups.bus,
             "tram": groups.tram,
             "special": groups.special,
-        }),
-        stale,
-    )
+        }), stale, cache)
 }
