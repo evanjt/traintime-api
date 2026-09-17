@@ -1,0 +1,20 @@
+name = "traintime-monitor"
+main = "src/index.js"
+compatibility_date = "2026-03-14"
+workers_dev = false
+preview_urls = false
+
+# Every five minutes, 288 runs a day against the account's 100k free invocations.
+[triggers]
+crons = ["*/5 * * * *"]
+
+# One key per host holding ok/down and when it changed, so a push only goes out
+# on a transition. Create with: wrangler kv namespace create STATE
+[[kv_namespaces]]
+binding = "STATE"
+id = "REPLACE_WITH_NAMESPACE_ID"
+
+# Secrets set with `wrangler secret put`: NTFY_TOPIC, API_KEY, optionally NTFY_TOKEN.
+
+[observability]
+enabled = false

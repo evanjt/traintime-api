@@ -19,6 +19,7 @@ on:
       - 'core/**'
       - 'server/**'
       - 'src/**'
+      - 'monitor/**'
       - 'Cargo.toml'
   workflow_dispatch:
 
@@ -43,6 +44,9 @@ jobs:
 
       - name: Test core
         run: cargo test --manifest-path core/Cargo.toml
+
+      - name: Test monitor
+        run: node --test monitor/test/
 
   build:
     if: github.event_name != 'pull_request'

@@ -14,6 +14,20 @@ npx wrangler dev
 
 Station data from the [SBB Didok dataset](https://opendata.swiss/en/dataset/haltestellen-des-offentlichen-verkehrs) (Swiss Federal Office of Transport, "Open use. Must provide the source."). Updated monthly via GitHub Actions.
 
+## Monitor
+
+`monitor/` is a second Worker that probes `api`, `api1` and `api2` every five minutes (health, departures freshness, nearby, formation, api/api1 parity) and pushes to an [ntfy](https://ntfy.sh) topic only when a host changes state.
+
+```sh
+cd monitor
+npx wrangler kv namespace create STATE   # paste the id into wrangler.toml
+npx wrangler secret put NTFY_TOPIC       # long and random, it is the password
+npx wrangler secret put API_KEY
+npx wrangler deploy
+```
+
+`NTFY_TOKEN` is optional, for an access-protected topic. Remove the cron trigger to roll back.
+
 ## License
 
 MIT. See `LICENSE`.
