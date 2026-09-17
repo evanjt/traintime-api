@@ -14,11 +14,8 @@ custom_domain = true
 pattern = "api2.traintime.ch"
 custom_domain = true
 
-# Places the Worker near the OJP backend. That backend resolves to a Tyk gateway
-# on AWS eu-central-1 (Frankfurt), not Switzerland. Mirrors the dashboard setting.
-[placement]
-mode = "targeted"
-hostname = "api.opentransportdata.swiss"
+# No Smart Placement: isolates placed at the OJP backend's region threw 1101
+# on most requests while the edge ran fine. Mirror this in the dashboard.
 
 [build]
 command = "export PATH=\"$HOME/.cargo/bin:$PATH\" && command -v cargo >/dev/null || curl -sSf https://sh.rustup.rs | sh -s -- -y -q 2>/dev/null && export PATH=\"$HOME/.cargo/bin:$PATH\" && rustup target add wasm32-unknown-unknown 2>/dev/null && cargo install -q \"worker-build@^0.7\" && worker-build --release"
