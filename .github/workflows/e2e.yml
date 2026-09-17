@@ -1,0 +1,30 @@
+name: e2e
+
+# Probes both live hosts with tests/e2e.sh. Not chained to the container
+# publish: the Argo sync it triggers is asynchronous, so a chained run would
+# test the old pod. Run by hand after a rollout, or wait for the nightly.
+# Secrets used: E2E_API_KEY, optionally E2E_EXTRA_API_KEYS (comma separated)
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '30 4 * * *'
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        host:
+          - https://api.traintime.ch
+          - https://api1.traintime.ch
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run suite
+        env:
+          BASE_URL: ${{ matrix.host }}
+          API_KEY: ${{ secrets.E2E_API_KEY }}
+          EXTRA_API_KEYS: ${{ secrets.E2E_EXTRA_API_KEYS }}
+        run: bash tests/e2e.sh

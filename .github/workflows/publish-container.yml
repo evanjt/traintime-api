@@ -45,6 +45,9 @@ jobs:
       - name: Test core
         run: cargo test --manifest-path core/Cargo.toml
 
+      - name: Test server
+        run: cargo test --manifest-path server/Cargo.toml --locked
+
       - name: Test monitor
         run: node --test monitor/test/
 
