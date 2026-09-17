@@ -5,6 +5,7 @@
 //! enforced by the dependency list in Cargo.toml (serde, serde_json, regex),
 //! which is what keeps this crate compiling for wasm32-unknown-unknown.
 
+pub mod auth;
 pub mod error;
 pub mod favourites;
 pub mod formation;
@@ -12,6 +13,7 @@ pub mod geo;
 pub mod ojp;
 pub mod stations;
 
+pub use auth::ApiKeys;
 pub use error::CoreError;
 pub use favourites::{parse_favourites, partition_favourites};
 pub use formation::{

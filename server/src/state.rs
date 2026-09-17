@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use traintime_core::ApiKeys;
+
 use crate::cache::Cache;
 use crate::stations::Stations;
 
@@ -13,5 +15,5 @@ pub struct AppState {
     pub ojp_api_key: String,
     pub formation_api_key: String,
     pub cache_ttl: u64,
-    pub api_key: String,
+    pub api_keys: Arc<ApiKeys>,
 }

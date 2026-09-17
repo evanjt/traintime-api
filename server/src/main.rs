@@ -16,6 +16,8 @@ mod routes;
 mod state;
 mod stations;
 
+use traintime_core::ApiKeys;
+
 use cache::Cache;
 use state::AppState;
 use stations::Stations;
@@ -48,7 +50,7 @@ async fn auth(
             .and_then(|v| v.to_str().ok())
             .unwrap_or_default();
 
-        if provided != state.api_key {
+        if state.api_keys.matched(provided).is_none() {
             return with_cors(
                 (
                     StatusCode::UNAUTHORIZED,
@@ -138,7 +140,10 @@ async fn run() -> Result<(), String> {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(60),
-        api_key: required_env("API_KEY")?,
+        api_keys: Arc::new(ApiKeys::parse(
+            std::env::var("API_KEYS").ok().as_deref(),
+            std::env::var("API_KEY").ok().as_deref(),
+        )?),
     };
 
     let app = Router::new()

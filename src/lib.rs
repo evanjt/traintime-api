@@ -7,6 +7,8 @@ use tower_service::Service;
 use worker::kv::KvStore;
 use worker::*;
 
+use traintime_core::ApiKeys;
+
 mod formation;
 mod ojp;
 mod routes;
@@ -78,14 +80,21 @@ async fn fetch(req: HttpRequest, env: Env, _ctx: Context) -> Result<AxumResponse
             .headers()
             .get("x-api-key")
             .and_then(|v| v.to_str().ok());
-        let api_key = env
-            .secret("API_KEY")
-            .map(|s| s.to_string())
-            .or_else(|_| env.var("API_KEY").map(|v| v.to_string()))
-            .ok();
+        let api_keys = ApiKeys::parse(
+            env.secret("API_KEYS")
+                .map(|s| s.to_string())
+                .or_else(|_| env.var("API_KEYS").map(|v| v.to_string()))
+                .ok()
+                .as_deref(),
+            env.secret("API_KEY")
+                .map(|s| s.to_string())
+                .or_else(|_| env.var("API_KEY").map(|v| v.to_string()))
+                .ok()
+                .as_deref(),
+        );
 
-        let authorized = match (&api_key, provided_key) {
-            (Some(expected), Some(provided)) => provided == expected.as_str(),
+        let authorized = match (&api_keys, provided_key) {
+            (Ok(keys), Some(provided)) => keys.matched(provided).is_some(),
             _ => false,
         };
 
