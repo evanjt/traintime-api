@@ -9,9 +9,11 @@ use worker::*;
 
 use traintime_core::ApiKeys;
 
+mod cache;
 mod formation;
 mod ojp;
 mod routes;
+mod upstream;
 
 type AxumResponse = axum::http::Response<axum::body::Body>;
 

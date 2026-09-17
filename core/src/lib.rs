@@ -6,6 +6,7 @@
 //! which is what keeps this crate compiling for wasm32-unknown-unknown.
 
 pub mod auth;
+pub mod cache;
 pub mod error;
 pub mod favourites;
 pub mod formation;
@@ -14,6 +15,7 @@ pub mod ojp;
 pub mod stations;
 
 pub use auth::ApiKeys;
+pub use cache::{classify, CachedPayload, Freshness, STALE_MAX_AGE_SECS};
 pub use error::CoreError;
 pub use favourites::{parse_favourites, partition_favourites};
 pub use formation::{

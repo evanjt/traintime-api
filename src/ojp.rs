@@ -1,6 +1,8 @@
 use wasm_bindgen::JsValue;
 use worker::console_log;
 
+use crate::upstream::timed;
+
 pub use traintime_core::ojp::FlatDeparture;
 use traintime_core::ojp::{build_stop_event_request_xml, parse_stop_events, OJP_ENDPOINT};
 
@@ -41,7 +43,7 @@ pub async fn fetch_departures(
 
     let req = worker::Request::new_with_init(OJP_ENDPOINT, &init)?;
 
-    let mut resp = worker::Fetch::Request(req).send().await?;
+    let mut resp = timed("OJP", worker::Fetch::Request(req).send()).await?;
     let elapsed = js_sys::Date::new_0().get_time() - start;
     let status = resp.status_code();
     console_log!("OJP {} {} {}ms", stop_ref, status, elapsed as u64);

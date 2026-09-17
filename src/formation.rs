@@ -1,5 +1,7 @@
 use worker::console_log;
 
+use crate::upstream::timed;
+
 pub use traintime_core::formation::FormationResult;
 use traintime_core::formation::{parse_formation_response, FORMATION_ENDPOINT};
 
@@ -25,7 +27,7 @@ pub async fn fetch_formation(
     init.with_method(worker::Method::Get).with_headers(headers);
 
     let req = worker::Request::new_with_init(&url, &init)?;
-    let mut resp = worker::Fetch::Request(req).send().await?;
+    let mut resp = timed("Formation", worker::Fetch::Request(req).send()).await?;
 
     let elapsed = js_sys::Date::new_0().get_time() - start;
     let status = resp.status_code();

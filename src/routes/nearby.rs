@@ -1,12 +1,13 @@
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
-use axum::response::IntoResponse;
-use axum::Json;
+use axum::response::Response;
 use serde::Deserialize;
 use wasm_bindgen::JsValue;
 use worker::console_log;
 
-use crate::ojp::fetch_departures;
+use crate::cache::{self, Cached};
+use crate::ojp::{fetch_departures, FlatDeparture};
+use crate::routes::respond;
 use crate::AppState;
 use traintime_core::geo::bounding_box;
 use traintime_core::stations::{default_station_id, group_nearby, Station};
@@ -23,13 +24,14 @@ pub struct NearbyQuery {
 pub async fn handle_nearby(
     State(state): State<AppState>,
     Query(params): Query<NearbyQuery>,
-) -> impl IntoResponse {
+) -> Response {
     let (lat, lon) = match (params.lat, params.lon) {
         (Some(lat), Some(lon)) if lat.is_finite() && lon.is_finite() => (lat, lon),
         _ => {
-            return (
+            return respond(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": "Missing or invalid lat/lon parameters" })),
+                serde_json::json!({ "error": "Missing or invalid lat/lon parameters" }),
+                None,
             );
         }
     };
@@ -49,9 +51,10 @@ pub async fn handle_nearby(
     let stmt = match bound {
         Ok(s) => s,
         Err(e) => {
-            return (
+            return respond(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": e.to_string() })),
+                serde_json::json!({ "error": e.to_string() }),
+                None,
             );
         }
     };
@@ -66,16 +69,18 @@ pub async fn handle_nearby(
                 None => rows,
             },
             Err(e) => {
-                return (
+                return respond(
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({ "error": e.to_string() })),
+                    serde_json::json!({ "error": e.to_string() }),
+                    None,
                 );
             }
         },
         Err(e) => {
-            return (
+            return respond(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": e.to_string() })),
+                serde_json::json!({ "error": e.to_string() }),
+                None,
             );
         }
     };
@@ -88,44 +93,47 @@ pub async fn handle_nearby(
     let embed_limit = 20usize;
     let default_id = default_station_id(&groups, requested_mode.as_deref());
 
+    let mut stale = None;
     if let Some(id) = default_id {
         let cache_key = format!("departures:{id}:{fetch_limit}");
-        let mut deps = None;
-
-        if let Ok(Some(cached)) = state.cache.get(&cache_key).text().await {
-            console_log!("CACHE HIT departures:{}:{}", id, fetch_limit);
-            deps = serde_json::from_str(&cached).ok();
-        }
-
-        if deps.is_none() {
-            console_log!("CACHE MISS departures:{}:{}", id, fetch_limit);
-            if let Ok(fetched) = fetch_departures(&state.ojp_api_key, &id, fetch_limit).await {
-                if let Ok(json_str) = serde_json::to_string(&fetched) {
-                    let _ = state
-                        .cache
-                        .put(&cache_key, &json_str)
-                        .unwrap()
-                        .expiration_ttl(state.cache_ttl)
-                        .execute()
-                        .await;
-                }
-                deps = Some(fetched);
+        let json = match cache::get(&state.cache, &cache_key, state.cache_ttl).await {
+            Cached::Fresh(v) => {
+                console_log!("CACHE HIT {}", cache_key);
+                Some(v)
             }
-        }
-
-        if let Some(mut d) = deps {
+            cached => {
+                console_log!("CACHE MISS {}", cache_key);
+                match fetch_departures(&state.ojp_api_key, &id, fetch_limit).await {
+                    Ok(fetched) => {
+                        let json = serde_json::to_string(&fetched).unwrap_or_default();
+                        cache::put(&state.cache, &cache_key, &json, state.cache_ttl).await;
+                        Some(json)
+                    }
+                    Err(e) => match cached {
+                        Cached::Stale(v, age) => {
+                            console_log!("STALE {} {}s: {}", cache_key, age, e);
+                            stale = Some(age);
+                            Some(v)
+                        }
+                        _ => None,
+                    },
+                }
+            }
+        };
+        if let Some(mut d) = json.and_then(|j| serde_json::from_str::<Vec<FlatDeparture>>(&j).ok()) {
             d.truncate(embed_limit);
             groups.attach_departures(&id, d);
         }
     }
 
-    (
+    respond(
         StatusCode::OK,
-        Json(serde_json::json!({
+        serde_json::json!({
             "train": groups.train,
             "bus": groups.bus,
             "tram": groups.tram,
             "special": groups.special,
-        })),
+        }),
+        stale,
     )
 }
