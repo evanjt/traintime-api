@@ -3,6 +3,7 @@ name = "traintime-server"
 version = "0.1.0"
 edition = "2021"
 authors = ["Evan Thomas <evan@evanjt.com>"]
+license = "MIT"
 description = "Native HTTP server build of traintime-api, for self-hosting"
 publish = false
 

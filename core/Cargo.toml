@@ -3,6 +3,7 @@ name = "traintime-core"
 version = "0.1.0"
 edition = "2021"
 authors = ["Evan Thomas <evan@evanjt.com>"]
+license = "MIT"
 description = "Runtime-agnostic types and parsers shared by the Cloudflare Worker and the native server"
 publish = false
 

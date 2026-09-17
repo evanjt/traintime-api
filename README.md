@@ -13,3 +13,9 @@ npx wrangler dev
 ## Data
 
 Station data from the [SBB Didok dataset](https://opendata.swiss/en/dataset/haltestellen-des-offentlichen-verkehrs) (Swiss Federal Office of Transport, "Open use. Must provide the source."). Updated monthly via GitHub Actions.
+
+## License
+
+MIT. See `LICENSE`.
+
+The deployed service at api.traintime.ch and its API keys are not part of the licence. `data/stations.json` is Didok data under "Open use. Must provide the source."
