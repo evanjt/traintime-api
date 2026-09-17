@@ -97,17 +97,34 @@ else
   fail "Lucerne dist" "expected 50-500m, got ${DIST}m"
 fi
 
-# Closest station in each non-empty group has departures
+# Only the default station embeds departures: the first station of the
+# first non-empty group in train, bus, tram, special order, or of the
+# requested mode's group when ?mode= is given. Clients fetch the rest
+# from /v1/departures.
+DEFAULT_KEY=""
 for key in train bus tram special; do
-  LEN=$(echo "$LU" | jq ".$key | length")
-  if [ "$LEN" -gt 0 ] 2>/dev/null; then
-    if echo "$LU" | jq -e ".$key[0].departures | type == \"array\"" > /dev/null 2>&1; then
-      pass "Lucerne $key[0] has departures array"
-    else
-      fail "Lucerne departures" "$key[0] missing departures"
-    fi
+  if [ -z "$DEFAULT_KEY" ] && [ "$(echo "$LU" | jq ".$key | length")" -gt 0 ]; then
+    DEFAULT_KEY=$key
   fi
 done
+if echo "$LU" | jq -e ".$DEFAULT_KEY[0].departures | type == \"array\"" > /dev/null 2>&1; then
+  pass "Lucerne default station ($DEFAULT_KEY[0]) has departures array"
+else
+  fail "Lucerne departures" "$DEFAULT_KEY[0] missing departures"
+fi
+
+for key in train bus tram special; do
+  if [ "$key" != "$DEFAULT_KEY" ] && echo "$LU" | jq -e ".$key[0] | has(\"departures\")" > /dev/null 2>&1; then
+    fail "Lucerne departures" "$key[0] embeds departures but is not the default station"
+  fi
+done
+
+LU_SPECIAL=$(api "/v1/nearby?lat=47.0502&lon=8.3102&mode=special")
+if echo "$LU_SPECIAL" | jq -e '.special[0].departures | type == "array"' > /dev/null 2>&1; then
+  pass "Lucerne mode=special embeds departures on special[0]"
+else
+  fail "Lucerne mode=special" "special[0] missing departures"
+fi
 
 # -------------------------------------------------------------------
 echo "4. Nearby Bern Marzili (funicular)"
