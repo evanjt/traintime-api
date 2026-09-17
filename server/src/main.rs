@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::extract::Request;
 use axum::http::StatusCode;
@@ -10,6 +11,7 @@ use axum::routing::get;
 use axum::{Json, Router};
 
 mod cache;
+mod fetch;
 mod formation;
 mod ojp;
 mod routes;
@@ -129,9 +131,13 @@ async fn run() -> Result<(), String> {
 
     let state = AppState {
         cache: Cache::default(),
+        inflight: fetch::Inflight::default(),
         db: Arc::new(db),
         http: reqwest::Client::builder()
             .user_agent("traintime/1.0")
+            .connect_timeout(Duration::from_secs(3))
+            .timeout(Duration::from_secs(10))
+            .pool_idle_timeout(Duration::from_secs(90))
             .build()
             .map_err(|e| e.to_string())?,
         ojp_api_key: required_env("OJP_API_KEY")?,

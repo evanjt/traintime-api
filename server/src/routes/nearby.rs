@@ -1,11 +1,13 @@
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
-use axum::response::IntoResponse;
-use axum::Json;
+use axum::response::Response;
 use serde::Deserialize;
 
+use crate::fetch::Fetched;
 use crate::ojp::fetch_departures;
+use crate::routes::respond;
 use crate::state::AppState;
+use traintime_core::ojp::FlatDeparture;
 use traintime_core::stations::{default_station_id, group_nearby};
 
 #[derive(Deserialize)]
@@ -19,13 +21,14 @@ pub struct NearbyQuery {
 pub async fn handle_nearby(
     State(state): State<AppState>,
     Query(params): Query<NearbyQuery>,
-) -> impl IntoResponse {
+) -> Response {
     let (lat, lon) = match (params.lat, params.lon) {
         (Some(lat), Some(lon)) if lat.is_finite() && lon.is_finite() => (lat, lon),
         _ => {
-            return (
+            return respond(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": "Missing or invalid lat/lon parameters" })),
+                serde_json::json!({ "error": "Missing or invalid lat/lon parameters" }),
+                None,
             );
         }
     };
@@ -42,40 +45,38 @@ pub async fn handle_nearby(
     let embed_limit = 20usize;
     let default_id = default_station_id(&groups, requested_mode.as_deref());
 
+    let mut stale = None;
     if let Some(id) = default_id {
         let cache_key = format!("departures:{id}:{fetch_limit}");
-        let mut deps = None;
-
-        if let Some(cached) = state.cache.get(&cache_key) {
-            println!("CACHE HIT {cache_key}");
-            deps = serde_json::from_str(&cached).ok();
-        }
-
-        if deps.is_none() {
-            println!("CACHE MISS {cache_key}");
-            if let Ok(fetched) =
-                fetch_departures(&state.http, &state.ojp_api_key, &id, fetch_limit).await
-            {
-                if let Ok(json_str) = serde_json::to_string(&fetched) {
-                    state.cache.put(&cache_key, &json_str, state.cache_ttl);
-                }
-                deps = Some(fetched);
+        let fetched = state
+            .inflight
+            .cached(&state.cache, &cache_key, state.cache_ttl, || async {
+                let deps = fetch_departures(&state.http, &state.ojp_api_key, &id, fetch_limit).await?;
+                serde_json::to_string(&deps).map_err(|e| e.to_string())
+            })
+            .await;
+        let json = match fetched {
+            Fetched::Fresh(v) => Some(v),
+            Fetched::Stale(v, age) => {
+                stale = Some(age);
+                Some(v)
             }
-        }
-
-        if let Some(mut d) = deps {
+            Fetched::Failed(_) => None,
+        };
+        if let Some(mut d) = json.and_then(|j| serde_json::from_str::<Vec<FlatDeparture>>(&j).ok()) {
             d.truncate(embed_limit);
             groups.attach_departures(&id, d);
         }
     }
 
-    (
+    respond(
         StatusCode::OK,
-        Json(serde_json::json!({
+        serde_json::json!({
             "train": groups.train,
             "bus": groups.bus,
             "tram": groups.tram,
             "special": groups.special,
-        })),
+        }),
+        stale,
     )
 }
