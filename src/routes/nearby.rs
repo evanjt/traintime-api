@@ -39,16 +39,12 @@ pub async fn handle_nearby(
 
     let (lat_min, lat_max, lon_min, lon_max) = bounding_box(lat, lon);
 
-    let bound = if let Some(ref q) = query_lower {
-        let pattern = format!("%{q}%");
-        state.db
-            .prepare("SELECT id, name, lat, lon, mode FROM stations WHERE lat BETWEEN ?1 AND ?2 AND lon BETWEEN ?3 AND ?4 AND LOWER(name) LIKE LOWER(?5)")
-            .bind(&[JsValue::from_f64(lat_min), JsValue::from_f64(lat_max), JsValue::from_f64(lon_min), JsValue::from_f64(lon_max), JsValue::from_str(&pattern)])
-    } else {
-        state.db
-            .prepare("SELECT id, name, lat, lon, mode FROM stations WHERE lat BETWEEN ?1 AND ?2 AND lon BETWEEN ?3 AND ?4")
-            .bind(&[JsValue::from_f64(lat_min), JsValue::from_f64(lat_max), JsValue::from_f64(lon_min), JsValue::from_f64(lon_max)])
-    };
+    // SQLite's LOWER and LIKE are ASCII only, so a query like "lö" would miss
+    // "Kirchhausen (Kr LÖ)". Fetch by bounding box and filter in Rust, as the
+    // native server does.
+    let bound = state.db
+        .prepare("SELECT id, name, lat, lon, mode FROM stations WHERE lat BETWEEN ?1 AND ?2 AND lon BETWEEN ?3 AND ?4")
+        .bind(&[JsValue::from_f64(lat_min), JsValue::from_f64(lat_max), JsValue::from_f64(lon_min), JsValue::from_f64(lon_max)]);
 
     let stmt = match bound {
         Ok(s) => s,
@@ -62,7 +58,13 @@ pub async fn handle_nearby(
 
     let rows: Vec<Station> = match stmt.all().await {
         Ok(r) => match r.results::<Station>() {
-            Ok(rows) => rows,
+            Ok(rows) => match query_lower {
+                Some(q) => rows
+                    .into_iter()
+                    .filter(|s| s.name.to_lowercase().contains(&q))
+                    .collect(),
+                None => rows,
+            },
             Err(e) => {
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,

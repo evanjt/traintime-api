@@ -149,6 +149,22 @@ else
 fi
 
 # -------------------------------------------------------------------
+echo "5b. Name query with a non-ASCII letter"
+LOE=$(api "/v1/nearby?lat=47.71412&lon=7.75601&query=l%C3%B6")
+
+if echo "$LOE" | jq -e '.bus[] | select(.id == "1100145")' > /dev/null 2>&1; then
+  pass "query=lö matches Kirchhausen (Kr LÖ)"
+else
+  fail "query=lö" "station 1100145 not found: $(echo "$LOE" | jq -c '[.bus[].name]')"
+fi
+
+if echo "$LOE" | jq -e '[.train[],.bus[],.tram[],.special[] | .name | select(test("lö"; "i") | not)] | length == 0' > /dev/null 2>&1; then
+  pass "query=lö returns only matching names"
+else
+  fail "query=lö" "non-matching name returned"
+fi
+
+# -------------------------------------------------------------------
 echo "6. Departures for Zurich HB (train)"
 ZHB=$(api "/v1/departures?id=8503000&limit=5")
 
