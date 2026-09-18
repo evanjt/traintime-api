@@ -216,6 +216,35 @@ test("run pushes once per transition and stores state", async () => {
   assert.equal(calls.length, 1);
 });
 
+test("a push ntfy rejects is sent again on the next run", async () => {
+  const store = new Map();
+  const env = {
+    API_KEY: "k",
+    NTFY_TOPIC: "t0pic",
+    STATE: { get: async (k) => store.get(k) ?? null, put: async (k, v) => store.set(k, v) },
+  };
+  const table = responses();
+  let ntfyStatus = 429;
+  let pushes = 0;
+  const fetchFn = async (url, init) => {
+    if (url.startsWith("https://ntfy.sh/")) {
+      pushes += 1;
+      return { status: ntfyStatus, json: async () => ({}) };
+    }
+    if (new URL(url).hostname === "api1.traintime.ch") throw new Error("tunnel down");
+    return fakeFetch(table)(url, init);
+  };
+  const deps = { fetch: fetchFn, sleep: noSleep };
+  await run(env, NOW, deps);
+  await run(env, NOW + 300000, deps);
+  assert.equal(pushes, 1);
+  assert.equal(JSON.parse(store.get("status:api1.traintime.ch")).status, "ok");
+  ntfyStatus = 200;
+  await run(env, NOW + 600000, deps);
+  assert.equal(pushes, 2);
+  assert.equal(JSON.parse(store.get("status:api1.traintime.ch")).status, "down");
+});
+
 test("run writes nothing while every host stays ok", async () => {
   const writes = [];
   const env = {

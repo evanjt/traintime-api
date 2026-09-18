@@ -36,12 +36,13 @@ export async function run(env, now = Date.now(), deps = {}) {
   for (const check of checks) {
     const prev = await readState(env.STATE, check.key);
     const { state, push } = transition(prev, check.ok, now);
+    // A push that did not land keeps the old state, so the next run sends it again.
+    if (push && !(await notify(env, message(check, push, prev, now), fetchFn))) {
+      continue;
+    }
     // The free plan allows 1,000 KV writes a day and a run every five minutes has four checks.
     if (JSON.stringify(state) !== JSON.stringify(prev)) {
       await env.STATE.put(`status:${check.key}`, JSON.stringify(state));
-    }
-    if (push) {
-      await notify(env, message(check, push, prev, now), fetchFn);
     }
   }
 }
@@ -226,11 +227,19 @@ async function notify(env, msg, fetchFn) {
     Tags: msg.tags,
   };
   if (env.NTFY_TOKEN) headers.Authorization = `Bearer ${env.NTFY_TOKEN}`;
-  await fetchFn(`https://ntfy.sh/${env.NTFY_TOPIC}`, {
-    method: "POST",
-    headers,
-    body: msg.body,
-  });
+  try {
+    const resp = await fetchFn(`https://ntfy.sh/${env.NTFY_TOPIC.trim()}`, {
+      method: "POST",
+      headers,
+      body: msg.body,
+    });
+    if (resp.status >= 200 && resp.status < 300) return true;
+    const detail = ((await resp.text?.().catch(() => "")) ?? "").slice(0, 120);
+    console.log(`ntfy push failed: ${resp.status} ${detail}`);
+  } catch (err) {
+    console.log(`ntfy push failed: ${err.message}`);
+  }
+  return false;
 }
 
 // --- Time ---

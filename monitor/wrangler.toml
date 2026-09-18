@@ -6,7 +6,8 @@ preview_urls = false
 
 # Every five minutes, 288 runs a day against the account's 100k free invocations.
 [triggers]
-crons = ["*/5 * * * *"]
+# Paused 2026-09-18: the probes arrive together and the API Worker breaks under concurrent requests.
+crons = []
 
 # One key per host holding ok/down and when it changed, so a push only goes out
 # on a transition. Create with: wrangler kv namespace create STATE
