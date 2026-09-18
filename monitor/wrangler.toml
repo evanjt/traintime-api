@@ -6,7 +6,9 @@ preview_urls = false
 
 # Every five minutes, 288 runs a day against the account's 100k free invocations.
 [triggers]
-crons = ["*/5 * * * *"]
+# Paused: ntfy.sh rejects pushes from Cloudflare's shared IPs (429, daily quota per IP).
+# The cluster watchdog is the monitor. Re-enable only with a delivery path that works.
+crons = []
 
 # One key per host holding ok/down and when it changed, so a push only goes out
 # on a transition. Create with: wrangler kv namespace create STATE
