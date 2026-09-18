@@ -17,9 +17,12 @@ export default {
 export async function run(env, now = Date.now(), deps = {}) {
   const fetchFn = deps.fetch ?? fetch;
   const sleep = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
-  const results = await Promise.all(
-    HOSTS.map((host) => probeHost(host, env.API_KEY, now, fetchFn, sleep)),
-  );
+  // api and api2 are one Worker. Probes that land together are the burst that
+  // broke it on 2026-09-18, so hosts are checked one after another.
+  const results = [];
+  for (const host of HOSTS) {
+    results.push(await probeHost(host, env.API_KEY, now, fetchFn, sleep));
+  }
   const checks = HOSTS.map((host, i) => ({
     key: host,
     ok: results[i].failures.length === 0,

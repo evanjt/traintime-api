@@ -261,3 +261,32 @@ test("run writes nothing while every host stays ok", async () => {
 test("local date follows Zurich", () => {
   assert.equal(localDate(Date.UTC(2026, 8, 17, 22, 30)), "2026-09-18");
 });
+
+// Scenario: api and api2 are one Worker, and a cold cache miss there costs
+// hundreds of milliseconds of CPU. Probes that arrive together are the load
+// pattern that took it down on 2026-09-18.
+// Expected behaviour: one host at a time, never two requests in flight.
+test("run probes the hosts one after another", async () => {
+  const store = new Map();
+  const env = {
+    API_KEY: "k",
+    NTFY_TOPIC: "t0pic",
+    STATE: { get: async (k) => store.get(k) ?? null, put: async (k, v) => store.set(k, v) },
+  };
+  const table = responses();
+  let inFlight = 0;
+  let maxInFlight = 0;
+  const hosts = [];
+  const fetchFn = async (url, init) => {
+    inFlight += 1;
+    maxInFlight = Math.max(maxInFlight, inFlight);
+    hosts.push(new URL(url).hostname);
+    await new Promise((r) => setTimeout(r, 1));
+    inFlight -= 1;
+    return fakeFetch(table)(url, init);
+  };
+  await run(env, NOW, { fetch: fetchFn, sleep: noSleep });
+  assert.equal(maxInFlight, 1);
+  const order = hosts.filter((h, i) => hosts[i - 1] !== h);
+  assert.deepEqual(order, ["api.traintime.ch", "api1.traintime.ch", "api2.traintime.ch"]);
+});
