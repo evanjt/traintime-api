@@ -66,7 +66,7 @@ pub fn parse_formation_short_string(short: &str) -> (Vec<String>, Vec<Wagon>) {
         .replace('[', "")
         .replace('(', "");
     // Remove "):N" patterns (train unit group IDs)
-    let re = regex::Regex::new(r"\):\d+").unwrap();
+    let re = crate::ojp::compile(r"\):\d+").unwrap();
     let cleaned = re.replace_all(&cleaned, "").to_string();
     let cleaned = cleaned.replace(')', "").replace(']', "");
 

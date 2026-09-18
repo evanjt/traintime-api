@@ -1,3 +1,7 @@
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
+
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
@@ -55,10 +59,33 @@ pub fn build_stop_event_request_xml(
     )
 }
 
+thread_local! {
+    static PATTERNS: RefCell<HashMap<String, Rc<Regex>>> = RefCell::new(HashMap::new());
+    #[cfg(test)]
+    static COMPILES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Compiling a pattern costs milliseconds in wasm and a response needs over a
+/// thousand lookups, which ran the Worker past its CPU limit. Each pattern is
+/// compiled once per thread. The `Rc` matters: a cloned `Regex` starts with an
+/// empty match cache and pays to rebuild it on its first search.
+pub fn compile(pattern: &str) -> Option<Rc<Regex>> {
+    PATTERNS.with(|patterns| {
+        if let Some(re) = patterns.borrow().get(pattern) {
+            return Some(re.clone());
+        }
+        #[cfg(test)]
+        COMPILES.with(|c| c.set(c.get() + 1));
+        let re = Rc::new(Regex::new(pattern).ok()?);
+        patterns.borrow_mut().insert(pattern.to_string(), re.clone());
+        Some(re)
+    })
+}
+
 /// Extract text content from a leaf tag (no children), matching optional namespace prefix
 pub fn xml_text(xml: &str, tag: &str) -> Option<String> {
     let pattern = format!(r"<(?:[a-z]+:)?{tag}[^>]*>([^<]*)</(?:[a-z]+:)?{tag}>");
-    let re = Regex::new(&pattern).ok()?;
+    let re = compile(&pattern)?;
     re.captures(xml).map(|cap| cap[1].trim().to_string())
 }
 
@@ -67,8 +94,8 @@ pub fn xml_blocks(xml: &str, tag: &str) -> Vec<String> {
     let mut blocks = Vec::new();
     let open_pattern = format!(r"(?i)<(?:[a-z]+:)?{tag}[^>]*>");
     let close_pattern = format!(r"(?i)</(?:[a-z]+:)?{tag}>");
-    let open_re = Regex::new(&open_pattern).unwrap();
-    let close_re = Regex::new(&close_pattern).unwrap();
+    let open_re = compile(&open_pattern).unwrap();
+    let close_re = compile(&close_pattern).unwrap();
 
     for open_match in open_re.find_iter(xml) {
         let search_start = open_match.end();
@@ -81,7 +108,7 @@ pub fn xml_blocks(xml: &str, tag: &str) -> Vec<String> {
 
 /// Extract <Text xml:lang="...">value</Text> from within a parent block
 pub fn xml_lang_text(xml: &str) -> Option<String> {
-    let re = Regex::new(r"(?i)<Text[^>]*>([^<]*)</Text>").unwrap();
+    let re = compile(r"(?i)<Text[^>]*>([^<]*)</Text>").unwrap();
     re.captures(xml).map(|cap| cap[1].trim().to_string())
 }
 
@@ -191,4 +218,39 @@ where
     }
 
     events
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const STOP_EVENT: &str = r#"<StopEventResult><StopEvent>
+      <ThisCall><CallAtStop>
+        <ServiceDeparture><TimetabledTime>2026-09-17T10:00:00Z</TimetabledTime></ServiceDeparture>
+        <PlannedQuay><Text>7</Text></PlannedQuay>
+      </CallAtStop></ThisCall>
+      <Service>
+        <Mode><ShortName><Text>IC</Text></ShortName></Mode>
+        <PublishedServiceName><Text>IC1</Text></PublishedServiceName>
+        <DestinationText><Text>Bern</Text></DestinationText>
+      </Service>
+    </StopEvent></StopEventResult>"#;
+
+    fn compiles_for(events: usize) -> usize {
+        let xml = format!("<OJP>{}</OJP>", STOP_EVENT.repeat(events));
+        let before = COMPILES.with(|c| c.get());
+        assert_eq!(parse_stop_events(&xml, |_| 0.0).len(), events);
+        COMPILES.with(|c| c.get()) - before
+    }
+
+    // Scenario: a cache miss parses 50 stop events inside the Worker's CPU
+    // limit, where compiling one pattern costs milliseconds.
+    // Expected behaviour: each pattern compiles once, however many events
+    // the response holds.
+    #[test]
+    fn pattern_compiles_do_not_grow_with_the_event_count() {
+        let first = compiles_for(1);
+        assert!(first <= 32, "{first} compiles for one event");
+        assert_eq!(compiles_for(50), 0);
+    }
 }
