@@ -99,7 +99,7 @@ pub async fn handle_nearby(
             cached => {
                 console_log!("CACHE MISS {}", cache_key);
                 cache = CacheStatus::Miss;
-                match fetch_departures(&state.ojp_api_key, &id, fetch_limit).await {
+                match fetch_departures(&state.ojp_endpoint, &state.ojp_api_key, &id, fetch_limit).await {
                     Ok(fetched) => {
                         let json = serde_json::to_string(&fetched).unwrap_or_default();
                         cache::put(&state.cache, &cache_key, &json, state.cache_ttl).await;

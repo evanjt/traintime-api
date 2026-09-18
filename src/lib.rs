@@ -22,6 +22,9 @@ pub struct AppState {
     pub cache: KvStore,
     pub db: Arc<worker::d1::D1Database>,
     pub ojp_api_key: String,
+    /// OJP_ENDPOINT override. Local burst tests point it at a stub so a run
+    /// never reaches SBB.
+    pub ojp_endpoint: String,
     pub formation_api_key: String,
     pub cache_ttl: u64,
 }
@@ -144,6 +147,10 @@ async fn fetch(req: HttpRequest, env: Env, _ctx: Context) -> Result<AxumResponse
         .secret("OJP_API_KEY")
         .map(|s| s.to_string())
         .or_else(|_| env.var("OJP_API_KEY").map(|v| v.to_string()))?;
+    let ojp_endpoint = env
+        .var("OJP_ENDPOINT")
+        .map(|v| v.to_string())
+        .unwrap_or_else(|_| traintime_core::ojp::OJP_ENDPOINT.to_string());
     let formation_api_key = env
         .secret("FORMATION_API_KEY")
         .map(|s| s.to_string())
@@ -158,6 +165,7 @@ async fn fetch(req: HttpRequest, env: Env, _ctx: Context) -> Result<AxumResponse
         cache,
         db: Arc::new(db),
         ojp_api_key,
+        ojp_endpoint,
         formation_api_key,
         cache_ttl,
     };

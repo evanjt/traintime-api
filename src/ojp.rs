@@ -4,7 +4,7 @@ use worker::console_log;
 use crate::upstream::timed;
 
 pub use traintime_core::ojp::FlatDeparture;
-use traintime_core::ojp::{build_stop_event_request_xml, parse_stop_events, OJP_ENDPOINT};
+use traintime_core::ojp::{build_stop_event_request_xml, parse_stop_events};
 
 /// Parse ISO timestamp string to unix milliseconds using js_sys::Date.
 ///
@@ -17,6 +17,7 @@ fn iso_to_ms(iso: &str) -> f64 {
 }
 
 pub async fn fetch_departures(
+    endpoint: &str,
     api_key: &str,
     stop_ref: &str,
     limit: u32,
@@ -41,7 +42,7 @@ pub async fn fetch_departures(
         .with_headers(headers)
         .with_body(Some(JsValue::from_str(&body)));
 
-    let req = worker::Request::new_with_init(OJP_ENDPOINT, &init)?;
+    let req = worker::Request::new_with_init(endpoint, &init)?;
 
     let mut resp = timed("OJP", worker::Fetch::Request(req).send()).await?;
     let elapsed = js_sys::Date::new_0().get_time() - start;

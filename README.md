@@ -18,6 +18,12 @@ Station data from the [SBB Didok dataset](https://opendata.swiss/en/dataset/halt
 
 Never through `api.opentransportdata.swiss` (50/min, 20,000/day per key) or the Cloudflare edge. Run the native server with `OJP_ENDPOINT` pointed at a stub and hit the ClusterIP.
 
+The Worker reads the same variable, for local bursts only:
+
+```sh
+npx wrangler dev --local --var OJP_ENDPOINT:http://127.0.0.1:8799/ojp20
+```
+
 ## Monitor
 
 `monitor/` is a cron Worker that probes `api`, `api1` and `api2` and pushes state changes to an ntfy topic. A push touching `monitor/` deploys it. Secrets are `NTFY_TOPIC` and `API_KEY`.

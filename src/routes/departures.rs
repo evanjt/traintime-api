@@ -53,7 +53,7 @@ pub async fn handle_departures(
         cached => {
             console_log!("CACHE MISS {}", cache_key);
             cache = CacheStatus::Miss;
-            match fetch_departures(&state.ojp_api_key, &station_id, fetch_limit).await {
+            match fetch_departures(&state.ojp_endpoint, &state.ojp_api_key, &station_id, fetch_limit).await {
                 Ok(departures) => {
                     let json = serde_json::to_string(&departures).unwrap_or_default();
                     cache::put(&state.cache, &cache_key, &json, state.cache_ttl).await;
