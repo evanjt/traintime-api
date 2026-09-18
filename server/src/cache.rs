@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use crate::memcached::Memcached;
+
 /// Entries above this count trigger an expiry sweep on the next insert.
 /// KV dropped expired keys for us; a HashMap does not, and formation keys
 /// (`formation:{evu}:{date}:{train}:{stop}`) are high cardinality.
@@ -18,12 +20,42 @@ struct Entry {
 
 /// Per-pod stand-in for the Workers KV binding. Same get/put-with-TTL surface,
 /// plus expired entries linger for `STALE_MAX_AGE` behind `get_stale`.
+/// With a shared Memcached the replicas see each other's fetches; without
+/// one this is exactly the per-pod cache.
 #[derive(Clone, Default)]
 pub struct Cache {
     inner: Arc<Mutex<HashMap<String, Entry>>>,
+    shared: Option<Memcached>,
 }
 
 impl Cache {
+    pub fn with_shared(shared: Memcached) -> Self {
+        Self {
+            inner: Default::default(),
+            shared: Some(shared),
+        }
+    }
+
+    /// The shared cache first, then this pod's own. Memcached answers inside
+    /// its timeout or not at all, so this never fails, only misses.
+    pub async fn lookup(&self, key: &str) -> Option<String> {
+        if let Some(shared) = &self.shared {
+            if let Some(v) = shared.get(key).await {
+                return Some(v);
+            }
+        }
+        self.get(key)
+    }
+
+    /// Writes this pod's cache and, when configured, the shared one with the
+    /// same TTL.
+    pub async fn store(&self, key: &str, value: &str, ttl_secs: u64) {
+        self.put(key, value, ttl_secs);
+        if let Some(shared) = &self.shared {
+            shared.set(key, value, ttl_secs).await;
+        }
+    }
+
     pub fn get(&self, key: &str) -> Option<String> {
         let map = self.inner.lock().unwrap();
         match map.get(key) {
@@ -108,7 +140,11 @@ mod tests {
     fn sweep_keeps_stale_entries_inside_the_window() {
         let cache = Cache::default();
         for i in 0..=SWEEP_THRESHOLD {
-            put_aged(&cache, &format!("old{i}"), STALE_MAX_AGE + Duration::from_secs(1));
+            put_aged(
+                &cache,
+                &format!("old{i}"),
+                STALE_MAX_AGE + Duration::from_secs(1),
+            );
         }
         put_aged(&cache, "stale", Duration::from_secs(120));
         cache.put("fresh", "v", 60);

@@ -13,6 +13,7 @@ use axum::{Json, Router};
 mod cache;
 mod fetch;
 mod formation;
+mod memcached;
 mod ojp;
 mod routes;
 mod state;
@@ -171,8 +172,18 @@ async fn run() -> Result<(), String> {
         stations_path.display()
     );
 
+    // Unset means each pod caches for itself, exactly as before.
+    let cache = match std::env::var("MEMCACHED_URL") {
+        Ok(url) if !url.trim().is_empty() => {
+            let shared = memcached::Memcached::new(&url);
+            println!("sharing the cache through memcached at {}", shared.addr());
+            Cache::with_shared(shared)
+        }
+        _ => Cache::default(),
+    };
+
     let state = AppState {
-        cache: Cache::default(),
+        cache,
         inflight: fetch::Inflight::default(),
         db: Arc::new(db),
         http: reqwest::Client::builder()
