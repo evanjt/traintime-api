@@ -20,7 +20,7 @@ Never through `api.opentransportdata.swiss` (50/min, 20,000/day per key) or the 
 
 ## Monitor
 
-`monitor/` is a cron Worker that probes `api`, `api1` and `api2` and pushes state changes to an ntfy topic. Deploy with `wrangler deploy` after setting `NTFY_TOPIC` and `API_KEY`.
+`monitor/` is a cron Worker that probes `api`, `api1` and `api2` and pushes state changes to an ntfy topic. A push touching `monitor/` deploys it. Secrets are `NTFY_TOPIC` and `API_KEY`.
 
 ## License
 

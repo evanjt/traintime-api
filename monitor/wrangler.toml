@@ -12,7 +12,7 @@ crons = ["*/5 * * * *"]
 # on a transition. Create with: wrangler kv namespace create STATE
 [[kv_namespaces]]
 binding = "STATE"
-id = "REPLACE_WITH_NAMESPACE_ID"
+id = "0ca1bcbfaf6548f3861ab1b7005a78db"
 
 # Secrets set with `wrangler secret put`: NTFY_TOPIC, API_KEY, optionally NTFY_TOKEN.
 

@@ -211,9 +211,22 @@ test("run pushes once per transition and stores state", async () => {
   assert.equal(calls[0].init.headers.Authorization, "Bearer tk");
   assert.equal(calls[0].init.headers["User-Agent"], "traintime-monitor/1");
   assert.equal(JSON.parse(store.get("status:api1.traintime.ch")).status, "down");
-  assert.equal(JSON.parse(store.get("status:parity")).status, "ok");
+  assert.equal(store.has("status:parity"), false);
   await run(env, NOW + 600000, deps);
   assert.equal(calls.length, 1);
+});
+
+test("run writes nothing while every host stays ok", async () => {
+  const writes = [];
+  const env = {
+    API_KEY: "k",
+    NTFY_TOPIC: "t0pic",
+    STATE: { get: async () => null, put: async (k) => writes.push(k) },
+  };
+  const deps = { fetch: fakeFetch(responses()), sleep: noSleep };
+  await run(env, NOW, deps);
+  await run(env, NOW + 300000, deps);
+  assert.deepEqual(writes, []);
 });
 
 test("local date follows Zurich", () => {

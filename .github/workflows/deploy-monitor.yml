@@ -1,0 +1,29 @@
+name: Deploy monitor
+
+# The monitor Worker has no Cloudflare build connection, so a push deploys it here.
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'monitor/**'
+      - '.github/workflows/deploy-monitor.yml'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: monitor
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test
+        run: node --test test/*.test.js
+
+      - name: Deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: 600f61d93bfc789d4ad9758213113409
+        run: npx --yes wrangler@4 deploy

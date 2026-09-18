@@ -36,7 +36,10 @@ export async function run(env, now = Date.now(), deps = {}) {
   for (const check of checks) {
     const prev = await readState(env.STATE, check.key);
     const { state, push } = transition(prev, check.ok, now);
-    await env.STATE.put(`status:${check.key}`, JSON.stringify(state));
+    // The free plan allows 1,000 KV writes a day and a run every five minutes has four checks.
+    if (JSON.stringify(state) !== JSON.stringify(prev)) {
+      await env.STATE.put(`status:${check.key}`, JSON.stringify(state));
+    }
     if (push) {
       await notify(env, message(check, push, prev, now), fetchFn);
     }
