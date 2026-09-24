@@ -119,7 +119,7 @@ pub fn parse_stop_events<F>(xml: &str, iso_to_ms: F) -> Vec<FlatDeparture>
 where
     F: Fn(&str) -> f64,
 {
-    let mut events = Vec::new();
+    let mut events: Vec<(Option<String>, FlatDeparture)> = Vec::new();
     let result_blocks = xml_blocks(xml, "StopEventResult");
 
     for result in &result_blocks {
@@ -158,6 +158,13 @@ where
 
         let train_number = xml_text(service_block, "TrainNumber");
         let operator_ref = xml_text(service_block, "OperatorRef");
+
+        // The operating day is part of the key so a board spanning midnight keeps
+        // both runs of a journey that repeats the next day.
+        let journey_key = xml_text(service_block, "JourneyRef").map(|journey| {
+            let day = xml_text(service_block, "OperatingDayRef").unwrap_or_default();
+            format!("{day}|{journey}")
+        });
 
         // --- ThisCall > CallAtStop (departure time, platform) ---
         let this_call_blocks = xml_blocks(stop_event_block, "ThisCall");
@@ -204,20 +211,59 @@ where
             .map(|eq| eq != &planned_quay)
             .unwrap_or(false);
 
-        events.push(FlatDeparture {
-            to: destination,
-            category,
-            number,
-            departure: departure_timestamp,
-            delay,
-            platform: estimated_quay.unwrap_or(planned_quay),
-            platform_changed,
-            train_number,
-            operator_ref,
-        });
+        events.push((
+            journey_key,
+            FlatDeparture {
+                to: destination,
+                category,
+                number,
+                departure: departure_timestamp,
+                delay,
+                platform: estimated_quay.unwrap_or(planned_quay),
+                platform_changed,
+                train_number,
+                operator_ref,
+            },
+        ));
     }
 
-    events
+    keep_latest_per_journey(events)
+}
+
+/// OJP can publish one journey twice at a stop: two StopEventResults sharing a
+/// JourneyRef but carrying different timetabled times, the earlier of which no
+/// operator board shows. Seen along the Valais corridor, where the Visp-Brig
+/// works make the IR90/IR95 additional (`Unplanned`) journeys.
+///
+/// Keying on the journey is what makes this safe. Two genuinely different trains
+/// a minute apart carry different JourneyRefs, so only real twins collapse -
+/// which a (time, line, destination) key could not tell apart. The published row
+/// is the later of the pair, checked against the SBB board at Sion, Visp, Bex
+/// and Brig.
+fn keep_latest_per_journey(events: Vec<(Option<String>, FlatDeparture)>) -> Vec<FlatDeparture> {
+    let mut kept: Vec<FlatDeparture> = Vec::with_capacity(events.len());
+    let mut seen: HashMap<String, usize> = HashMap::new();
+
+    for (key, event) in events {
+        let Some(key) = key else {
+            kept.push(event);
+            continue;
+        };
+        match seen.get(&key) {
+            Some(&at) => {
+                if event.departure > kept[at].departure {
+                    kept[at] = event;
+                }
+            }
+            None => {
+                seen.insert(key, kept.len());
+                kept.push(event);
+            }
+        }
+    }
+
+    kept.sort_by_key(|event| event.departure);
+    kept
 }
 
 #[cfg(test)]
@@ -241,6 +287,98 @@ mod tests {
         let before = COMPILES.with(|c| c.get());
         assert_eq!(parse_stop_events(&xml, |_| 0.0).len(), events);
         COMPILES.with(|c| c.get()) - before
+    }
+
+    fn event(journey: &str, day: &str, time: &str, quay: &str) -> String {
+        format!(
+            r#"<StopEventResult><StopEvent>
+              <ThisCall><CallAtStop>
+                <ServiceDeparture><TimetabledTime>{time}</TimetabledTime></ServiceDeparture>
+                <PlannedQuay><Text>{quay}</Text></PlannedQuay>
+              </CallAtStop></ThisCall>
+              <Service>
+                <OperatingDayRef>{day}</OperatingDayRef>
+                <JourneyRef>{journey}</JourneyRef>
+                <Mode><ShortName><Text>IR</Text></ShortName></Mode>
+                <PublishedServiceName><Text>IR90</Text></PublishedServiceName>
+                <DestinationText><Text>Visp</Text></DestinationText>
+              </Service>
+            </StopEvent></StopEventResult>"#
+        )
+    }
+
+    fn parse(events: &[String]) -> Vec<FlatDeparture> {
+        let xml = format!("<OJP>{}</OJP>", events.concat());
+        parse_stop_events(&xml, |iso| {
+            let clock = &iso[11..19];
+            let parts: Vec<f64> = clock.split(':').map(|v| v.parse().unwrap()).collect();
+            (parts[0] * 3600.0 + parts[1] * 60.0 + parts[2]) * 1000.0
+        })
+    }
+
+    const DAY: &str = "2026-09-19";
+    const IR90: &str = "ch:1:sjyid:100001:30617-006";
+    const IR95: &str = "ch:1:sjyid:100001:30919-005";
+    const R91: &str = "ch:1:sjyid:100055:6218-001";
+
+    // Scenario: OJP publishes an additional journey twice at Sion, the twins
+    // differing only in timetabled time and quay.
+    // Expected behaviour: one row survives, the later one, which is what the
+    // SBB board shows.
+    #[test]
+    fn twin_results_for_one_journey_collapse_to_the_later_row() {
+        let rows = parse(&[
+            event(IR90, DAY, "2026-09-19T10:56:18Z", ""),
+            event(IR90, DAY, "2026-09-19T10:57:00Z", "2"),
+        ]);
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].departure, 10 * 3600 + 57 * 60);
+        assert_eq!(rows[0].platform, "2");
+    }
+
+    // The twins arrive in either order, so the rule cannot rely on the later row
+    // coming second.
+    #[test]
+    fn the_later_row_wins_whichever_order_it_arrives_in() {
+        let rows = parse(&[
+            event(IR90, DAY, "2026-09-19T10:57:00Z", "2"),
+            event(IR90, DAY, "2026-09-19T10:56:18Z", ""),
+        ]);
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].departure, 10 * 3600 + 57 * 60);
+    }
+
+    // Scenario: two different trains really do leave a minute apart.
+    // Expected behaviour: both stay, because the key is the journey and not the
+    // departure minute.
+    #[test]
+    fn different_journeys_a_minute_apart_both_survive() {
+        let rows = parse(&[
+            event(IR95, DAY, "2026-09-19T11:19:00Z", "2"),
+            event(R91, DAY, "2026-09-19T11:20:00Z", "3"),
+        ]);
+
+        assert_eq!(rows.len(), 2);
+    }
+
+    // A board that spans midnight sees the same journey on two operating days.
+    #[test]
+    fn one_journey_on_two_operating_days_stays_twice() {
+        let rows = parse(&[
+            event(IR90, DAY, "2026-09-19T23:57:00Z", "2"),
+            event(IR90, "2026-09-20", "2026-09-20T00:57:00Z", "2"),
+        ]);
+
+        assert_eq!(rows.len(), 2);
+    }
+
+    // A response without JourneyRef must not collapse into a single row.
+    #[test]
+    fn results_without_a_journey_ref_are_all_kept() {
+        let xml = format!("<OJP>{}</OJP>", STOP_EVENT.repeat(3));
+        assert_eq!(parse_stop_events(&xml, |_| 0.0).len(), 3);
     }
 
     // Scenario: a cache miss parses 50 stop events inside the Worker's CPU
