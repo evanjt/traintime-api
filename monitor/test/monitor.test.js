@@ -81,8 +81,24 @@ test("stale departures fail", async () => {
   stale[0].departure = (NOW - 31 * 60000) / 1000;
   const table = responses({ "/v1/departures": [200, { departures: stale }] });
   const r = await probeHost("api.traintime.ch", "k", NOW, fakeFetch(table), noSleep);
-  assert.deepEqual(r.failures, ["departures: first departure -31 min from now"]);
+  assert.deepEqual(r.failures, ["departures: first departure 31 min ago"]);
   assert.deepEqual(r.departures, []);
+});
+
+test("the night gap before the first train passes", async () => {
+  const deps = [departure(0)];
+  deps[0].departure = (NOW + 222 * 60000) / 1000;
+  const table = responses({ "/v1/departures": [200, { departures: deps }] });
+  const r = await probeHost("api.traintime.ch", "k", NOW, fakeFetch(table), noSleep);
+  assert.deepEqual(r.failures, []);
+});
+
+test("a first departure beyond the night gap fails", async () => {
+  const deps = [departure(0)];
+  deps[0].departure = (NOW + 7 * 3600000) / 1000;
+  const table = responses({ "/v1/departures": [200, { departures: deps }] });
+  const r = await probeHost("api.traintime.ch", "k", NOW, fakeFetch(table), noSleep);
+  assert.deepEqual(r.failures, ["departures: first departure 420 min from now"]);
 });
 
 test("empty departures and missing station fail", async () => {

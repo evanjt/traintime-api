@@ -4,6 +4,9 @@ const USER_AGENT = "traintime-monitor/1";
 const REQUEST_TIMEOUT_MS = 8000;
 const RETRY_DELAY_MS = 5000;
 const STALE_MS = 30 * 60 * 1000;
+// Zürich HB has no train for about four hours after 00:40, so a far first
+// departure is only wrong past that gap.
+const NIGHT_GAP_MS = 6 * 60 * 60 * 1000;
 const DOWN_AFTER_FAILS = 2;
 const REMINDER_HOUR = 8;
 const TIME_ZONE = "Europe/Zurich";
@@ -103,7 +106,10 @@ async function checkDepartures(get, now) {
   const deps = body?.departures;
   if (!Array.isArray(deps) || deps.length === 0) return "departures: empty";
   const offset = deps[0].departure * 1000 - now;
-  if (Math.abs(offset) > STALE_MS) {
+  if (offset < -STALE_MS) {
+    return `departures: first departure ${Math.round(-offset / 60000)} min ago`;
+  }
+  if (offset > NIGHT_GAP_MS) {
     return `departures: first departure ${Math.round(offset / 60000)} min from now`;
   }
   return deps;
