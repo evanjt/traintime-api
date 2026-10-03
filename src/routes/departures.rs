@@ -44,7 +44,7 @@ pub async fn handle_departures(
     let fetch_limit = 50u32;
     let cache_key = format!("departures:{station_id}:{fetch_limit}");
     let mut cache;
-    let (json, stale) = match cache::get(&state.cache, &cache_key, state.cache_ttl).await {
+    let (json, stale) = match cache::get(&cache_key, state.cache_ttl).await {
         Cached::Fresh(v) => {
             console_log!("CACHE HIT {}", cache_key);
             cache = CacheStatus::Hit;
@@ -56,7 +56,7 @@ pub async fn handle_departures(
             match fetch_departures(&state.ojp_endpoint, &state.ojp_api_key, &station_id, fetch_limit).await {
                 Ok(departures) => {
                     let json = serde_json::to_string(&departures).unwrap_or_default();
-                    cache::put(&state.cache, &cache_key, &json, state.cache_ttl).await;
+                    cache::put(&cache_key, &json, state.cache_ttl).await;
                     (json, None)
                 }
                 Err(e) => match cached {

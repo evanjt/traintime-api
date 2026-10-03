@@ -1,4 +1,4 @@
-use worker::kv::KvStore;
+use worker::{Cache, Headers, Response};
 
 use traintime_core::{classify, CachedPayload, Freshness, STALE_MAX_AGE_SECS};
 
@@ -13,14 +13,27 @@ fn now_ms() -> u64 {
     js_sys::Date::new_0().get_time() as u64
 }
 
-/// A value written before the envelope existed is served as fresh; it expires
-/// from KV on its own within the old TTL.
-pub async fn get(kv: &KvStore, key: &str, ttl_secs: u64) -> Cached {
-    let Ok(Some(raw)) = kv.get(key).text().await else {
+/// The Cache API keys on a URL. A host on our own zone keeps the entry ours,
+/// and one fixed host lets api and api2 share it.
+fn cache_url(key: &str) -> String {
+    let key = String::from(js_sys::encode_uri_component(key));
+    format!("https://api.traintime.ch/__cache/{key}")
+}
+
+/// The edge cache of the data centre serving the request. KV cost one write
+/// per miss against a free-plan allowance of 1,000 a day shared with every
+/// Worker on the account; the Cache API has no operation limits. It is per data
+/// centre and may evict early, which for a Swiss audience means Zürich and
+/// Geneva each fetching a station at most once a TTL.
+pub async fn get(key: &str, ttl_secs: u64) -> Cached {
+    let Ok(Some(mut resp)) = Cache::default().get(cache_url(key), false).await else {
+        return Cached::Missing;
+    };
+    let Ok(raw) = resp.text().await else {
         return Cached::Missing;
     };
     let Ok(entry) = serde_json::from_str::<CachedPayload>(&raw) else {
-        return Cached::Fresh(raw);
+        return Cached::Missing;
     };
     match classify(entry.fetched_at, now_ms(), ttl_secs) {
         Freshness::Fresh => Cached::Fresh(entry.payload),
@@ -29,10 +42,11 @@ pub async fn get(kv: &KvStore, key: &str, ttl_secs: u64) -> Cached {
     }
 }
 
-/// KV keeps the entry for the stale window, freshness is judged on read. A
-/// failed write is ignored: on the free plan KV writes run out and caching
-/// simply stops.
-pub async fn put(kv: &KvStore, key: &str, payload: &str, ttl_secs: u64) {
+/// The entry is kept for the stale window, freshness is judged on read. A
+/// failed put is ignored and the next request simply fetches again. The Cache
+/// API is a no-op outside a custom domain, so this also holds under
+/// `wrangler dev` without a zone.
+pub async fn put(key: &str, payload: &str, ttl_secs: u64) {
     let entry = CachedPayload {
         fetched_at: now_ms(),
         payload: payload.to_string(),
@@ -40,11 +54,15 @@ pub async fn put(kv: &KvStore, key: &str, payload: &str, ttl_secs: u64) {
     let Ok(raw) = serde_json::to_string(&entry) else {
         return;
     };
-    let Ok(put) = kv.put(key, &raw) else {
+    let headers = Headers::new();
+    let max_age = ttl_secs.max(STALE_MAX_AGE_SECS);
+    if headers.set("Cache-Control", &format!("max-age={max_age}")).is_err() {
+        return;
+    }
+    let Ok(resp) = Response::ok(raw) else {
         return;
     };
-    let _ = put
-        .expiration_ttl(ttl_secs.max(STALE_MAX_AGE_SECS))
-        .execute()
+    let _ = Cache::default()
+        .put(cache_url(key), resp.with_headers(headers))
         .await;
 }

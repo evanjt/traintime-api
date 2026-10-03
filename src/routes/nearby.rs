@@ -90,7 +90,7 @@ pub async fn handle_nearby(
     let mut cache = CacheStatus::None;
     if let Some(id) = default_id {
         let cache_key = format!("departures:{id}:{fetch_limit}");
-        let json = match cache::get(&state.cache, &cache_key, state.cache_ttl).await {
+        let json = match cache::get(&cache_key, state.cache_ttl).await {
             Cached::Fresh(v) => {
                 console_log!("CACHE HIT {}", cache_key);
                 cache = CacheStatus::Hit;
@@ -102,7 +102,7 @@ pub async fn handle_nearby(
                 match fetch_departures(&state.ojp_endpoint, &state.ojp_api_key, &id, fetch_limit).await {
                     Ok(fetched) => {
                         let json = serde_json::to_string(&fetched).unwrap_or_default();
-                        cache::put(&state.cache, &cache_key, &json, state.cache_ttl).await;
+                        cache::put(&cache_key, &json, state.cache_ttl).await;
                         Some(json)
                     }
                     Err(e) => match cached {

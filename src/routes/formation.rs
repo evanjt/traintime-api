@@ -71,7 +71,7 @@ pub async fn handle_formation(
     let cache_key = format!("formation:{evu}:{date}:{train_number}:{stop_key}");
 
     let mut cache;
-    let (json, stale) = match cache::get(&state.cache, &cache_key, FORMATION_CACHE_TTL).await {
+    let (json, stale) = match cache::get(&cache_key, FORMATION_CACHE_TTL).await {
         Cached::Fresh(v) => {
             console_log!("CACHE HIT {}", cache_key);
             cache = CacheStatus::Hit;
@@ -91,7 +91,7 @@ pub async fn handle_formation(
             {
                 Ok(result) => {
                     let json = serde_json::to_string(&result).unwrap_or_default();
-                    cache::put(&state.cache, &cache_key, &json, FORMATION_CACHE_TTL).await;
+                    cache::put(&cache_key, &json, FORMATION_CACHE_TTL).await;
                     (json, None)
                 }
                 Err(e) => match cached {

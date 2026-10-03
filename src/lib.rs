@@ -4,7 +4,6 @@ use axum::http::StatusCode;
 use axum::routing::get;
 use axum::{Json, Router};
 use tower_service::Service;
-use worker::kv::KvStore;
 use worker::*;
 
 use traintime_core::{auth, format_line, ApiKeys, CacheStatus};
@@ -19,7 +18,6 @@ type AxumResponse = axum::http::Response<axum::body::Body>;
 
 #[derive(Clone)]
 pub struct AppState {
-    pub cache: KvStore,
     pub db: Arc<worker::d1::D1Database>,
     pub ojp_api_key: String,
     /// OJP_ENDPOINT override. Local burst tests point it at a stub so a run
@@ -141,7 +139,6 @@ async fn fetch(req: HttpRequest, env: Env, _ctx: Context) -> Result<AxumResponse
     }
 
     // Build state
-    let cache = env.kv("CACHE")?;
     let db = env.d1("DB")?;
     let ojp_api_key = env
         .secret("OJP_API_KEY")
@@ -162,7 +159,6 @@ async fn fetch(req: HttpRequest, env: Env, _ctx: Context) -> Result<AxumResponse
         .unwrap_or(60);
 
     let state = AppState {
-        cache,
         db: Arc::new(db),
         ojp_api_key,
         ojp_endpoint,
