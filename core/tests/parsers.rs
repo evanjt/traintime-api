@@ -26,10 +26,10 @@ fn formation_sectors_and_features() {
     assert_eq!(
         wagons.iter().map(wagon_tuple).collect::<Vec<_>>(),
         [
-            (1, 1, 2, "A", vec![], false),
+            (1, 1, 2, "A", vec!["bike"], false),
             (2, 2, 2, "A", vec![], false),
             (3, 3, 2, "B", vec![], false),
-            (4, 4, 1, "B", vec!["restaurant"], false),
+            (4, 4, 1, "B", vec!["bike"], false),
             (5, 5, 1, "C", vec![], false),
         ]
     );
@@ -37,17 +37,18 @@ fn formation_sectors_and_features() {
 
 #[test]
 fn formation_unit_groups_and_closed_marker() {
-    // Vehicles before the first @SECTOR carry an empty sector, and `%` marks closed.
+    // Vehicles before the first @SECTOR carry an empty sector. A unit's last car carries
+    // `)` before its number, and `-` marks a closed car (`%` is a restaurant not serving).
     let (sectors, wagons) =
-        parse_formation_short_string("[(1:11#BHP;NF,2:12#VH):3],@D2:9#VH;FZ,%2:8");
+        parse_formation_short_string("[(1:11#BHP;NF,2):12#VH],@D2:9#VH;FZ,-2:8");
 
     assert_eq!(sectors, ["D"]);
     assert_eq!(
         wagons.iter().map(wagon_tuple).collect::<Vec<_>>(),
         [
             (1, 11, 1, "", vec!["wheelchair", "low_floor"], false),
-            (2, 12, 2, "", vec![], false),
-            (3, 9, 2, "D", vec!["family"], false),
+            (2, 12, 2, "", vec!["bike"], false),
+            (3, 9, 2, "D", vec!["family", "bike"], false),
             (4, 8, 2, "D", vec![], true),
         ]
     );
@@ -55,8 +56,7 @@ fn formation_unit_groups_and_closed_marker() {
 
 #[test]
 fn formation_class_only_numbers_fall_back_to_position() {
-    // No car numbers given, so the sentinel-resolution pass produces duplicates,
-    // which then collapse to sequential positions.
+    // No car numbers given, so every car falls back to its position.
     let (sectors, wagons) = parse_formation_short_string("@A1,1,2,2,@B2");
 
     assert_eq!(sectors, ["A", "B"]);

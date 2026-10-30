@@ -14,6 +14,14 @@ pub struct Wagon {
     pub features: Vec<String>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub closed: bool,
+    #[serde(rename = "noPassageAfter", skip_serializing_if = "std::ops::Not::not")]
+    pub no_passage_after: bool,
+    #[serde(rename = "mixedClass", skip_serializing_if = "std::ops::Not::not")]
+    pub mixed_class: bool,
+    #[serde(rename = "bikeReservation", skip_serializing_if = "std::ops::Not::not")]
+    pub bike_reservation: bool,
+    #[serde(rename = "numberUnknown", skip_serializing_if = "std::ops::Not::not")]
+    pub number_unknown: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -47,222 +55,140 @@ pub fn operator_ref_to_evu(op_ref: &str) -> Option<&'static str> {
     }
 }
 
-/// Parse a formationShortString into sectors and wagons.
+/// One vehicle token of a formationShortString, before passenger filtering.
+struct Vehicle {
+    kind: String,
+    sector: String,
+    number: Option<u32>,
+    opens: bool,
+    closes: bool,
+    closed: bool,
+    not_serving: bool,
+    offers: Vec<String>,
+}
+
+/// Parse a formationShortString into sectors and passenger wagons, front first.
 ///
-/// Format: `@SECTOR` marks sector boundaries, comma-separated vehicles.
-/// Each vehicle is `CLASS:NUMBER` optionally followed by `#FEATURE` flags.
-/// Features: VR = restaurant, BHP = wheelchair accessible, W = wheelchair space.
-/// Vehicles in `[(...):N]` are a train unit group.
-/// `F` means a non-passenger vehicle (skip it).
-/// `%` prefix means closed/unavailable (include but mark).
+/// A vehicle is `[(][status][(]TYPE[)][:NUMBER][#OFFER;OFFER]`, comma separated, with
+/// `@SECTOR` leading or trailing a token and `[` `]` around the train's own vehicles.
+/// `(` and `)` mark a vehicle end with no access to its neighbour. Status: `-` closed,
+/// `%` restaurant open but not serving, `>` and `=` group boarding and reservation.
+/// Types: 1, 2, 12 (mixed), CC, FA, WL, WR, W1, W2, K; LK (traction), D (baggage),
+/// F (fictitious, pads the platform) and X (parked) are not passenger cars.
+///
+/// The output keeps the shape older apps read: class is 1 or 2, number is always set
+/// (position when the feed gives none, flagged numberUnknown), and features list the
+/// original five strings before `bike`.
 pub fn parse_formation_short_string(short: &str) -> (Vec<String>, Vec<Wagon>) {
+    let token_re = crate::ojp::compile(
+        r"^(\()?([-%>=]*)(\()?(LK|CC|FA|WL|WR|W1|W2|12|1|2|D|F|K|X)(\))?(?::(\d+))?(?:#([A-Za-z0-9;]+))?$",
+    )
+    .unwrap();
     let mut sectors: Vec<String> = Vec::new();
+    let mut vehicles: Vec<Vehicle> = Vec::new();
+    let mut sector = String::new();
+
+    let enter = |s: &str, sector: &mut String, sectors: &mut Vec<String>| {
+        *sector = s.to_string();
+        if !sectors.iter().any(|x| x == s) {
+            sectors.push(s.to_string());
+        }
+    };
+
+    for raw in short.split(',') {
+        let mut token = raw.trim().replace(['[', ']'], "");
+        if let Some(rest) = token.strip_prefix('@') {
+            let letter: String = rest.chars().take_while(|c| c.is_ascii_alphabetic()).take(1).collect();
+            if !letter.is_empty() {
+                enter(&letter.to_uppercase(), &mut sector, &mut sectors);
+                token = rest[letter.len()..].to_string();
+            }
+        }
+        let mut trailing = None;
+        if let Some(at) = token.rfind('@') {
+            let tail = &token[at + 1..];
+            if tail.len() == 1 && tail.chars().all(|c| c.is_ascii_alphabetic()) {
+                trailing = Some(tail.to_uppercase());
+                token.truncate(at);
+            }
+        }
+        if !token.is_empty() {
+            if let Some(c) = token_re.captures(&token) {
+                let status = c.get(2).map_or("", |m| m.as_str());
+                vehicles.push(Vehicle {
+                    kind: c[4].to_string(),
+                    sector: sector.clone(),
+                    number: c.get(6).and_then(|m| m.as_str().parse().ok()),
+                    opens: c.get(1).is_some() || c.get(3).is_some(),
+                    closes: c.get(5).is_some(),
+                    closed: status.contains('-'),
+                    not_serving: status.contains('%'),
+                    offers: c
+                        .get(7)
+                        .map(|m| m.as_str().split(';').map(|o| o.trim().to_uppercase()).collect())
+                        .unwrap_or_default(),
+                });
+            }
+        }
+        if let Some(s) = trailing {
+            enter(&s, &mut sector, &mut sectors);
+        }
+    }
+
     let mut wagons: Vec<Wagon> = Vec::new();
-    let mut current_sector = String::new();
-    let mut position: usize = 0;
-
-    // Remove train-unit group brackets and trailing group IDs like ):3
-    let cleaned = short
-        .replace('[', "")
-        .replace('(', "");
-    // Remove "):N" patterns (train unit group IDs)
-    let re = crate::ojp::compile(r"\):\d+").unwrap();
-    let cleaned = re.replace_all(&cleaned, "").to_string();
-    let cleaned = cleaned.replace(')', "").replace(']', "");
-
-    for token in cleaned.split(',') {
-        let token = token.trim();
-        if token.is_empty() {
+    let mut boundary_pending = false;
+    for (i, v) in vehicles.iter().enumerate() {
+        let next_opens = vehicles.get(i + 1).is_some_and(|n| n.opens);
+        if matches!(v.kind.as_str(), "LK" | "D" | "F" | "X") {
+            // A boundary on either side of a non-passenger vehicle still separates the cars around it
+            boundary_pending |= v.closes || next_opens;
             continue;
         }
-
-        // A token may start with @SECTOR — extract it first
-        // e.g. "@D" or just "2:9#VH;FZ" or "2:5#VH@B" (sector change after features)
-        let token = if let Some(rest) = token.strip_prefix('@') {
-            // Pure sector marker like "@D" or sector+vehicle like "@D2:9#VH"
-            // Split: sector letter is just the first char if followed by digit or end
-            if rest.len() == 1 || (rest.len() > 1 && !rest.as_bytes()[1].is_ascii_alphabetic()) {
-                current_sector = rest[..1].to_uppercase();
-                if !sectors.contains(&current_sector) {
-                    sectors.push(current_sector.clone());
-                }
-                &rest[1..]
-            } else {
-                current_sector = rest.to_uppercase();
-                if !sectors.contains(&current_sector) {
-                    sectors.push(current_sector.clone());
-                }
-                ""
-            }
-        } else {
-            token
-        };
-
-        if token.is_empty() {
-            continue;
-        }
-
-        // Check for sector change embedded after features: "2:5#VH@B"
-        // Split on @ to get vehicle part and trailing sector
-        let (vehicle_part, trailing_sector) = if let Some(at_pos) = token.rfind('@') {
-            let sector = &token[at_pos + 1..];
-            if sector.len() == 1 && sector.as_bytes()[0].is_ascii_alphabetic() {
-                (&token[..at_pos], Some(sector.to_uppercase()))
-            } else {
-                (token, None)
-            }
-        } else {
-            (token, None)
-        };
-
-        // Check for closed marker
-        let (vehicle_part, closed) = if let Some(rest) = vehicle_part.strip_prefix('%') {
-            (rest, true)
-        } else {
-            (vehicle_part, false)
-        };
-
-        // Skip non-passenger vehicles (F, LK = locomotive)
-        if vehicle_part == "F" || vehicle_part == "LK" || vehicle_part.starts_with("F#") {
-            // Still update sector if trailing
-            if let Some(s) = trailing_sector {
-                current_sector = s;
-                if !sectors.contains(&current_sector) {
-                    sectors.push(current_sector.clone());
-                }
-            }
-            continue;
-        }
-
-        // Split off features (marked with #, multiple separated by ;)
-        // e.g. "2:9#VH;FZ" or "1:2#BHP;NF"
-        let parts: Vec<&str> = vehicle_part.splitn(2, '#').collect();
-        let base = parts[0];
-        let mut features: Vec<String> = Vec::new();
-
-        if parts.len() > 1 {
-            for feat in parts[1].split(';') {
-                let feat = feat.trim().to_uppercase();
-                match feat.as_str() {
-                    "VR" => features.push("restaurant".to_string()),
-                    "BHP" => features.push("wheelchair".to_string()),
-                    "NF" => features.push("low_floor".to_string()),
-                    "VH" => {} // VH = Velohaken (bike hooks) — skip for now
-                    "FZ" => features.push("family".to_string()),
-                    "BZ" => features.push("business".to_string()),
-                    "FS" => {} // FreeSurf wifi — skip
-                    other if !other.is_empty() => features.push(other.to_lowercase()),
-                    _ => {}
-                }
+        if boundary_pending || v.opens {
+            if let Some(prev) = wagons.last_mut() {
+                prev.no_passage_after = true;
             }
         }
+        boundary_pending = v.closes || next_opens;
 
-        // Parse CLASS:NUMBER or just CLASS (some operators omit car numbers)
-        let class_number: Vec<&str> = base.split(':').collect();
-        let class_val: u8;
-        let number_val: u32;
+        let has = |o: &str| v.offers.iter().any(|x| x == o);
+        let mut features = Vec::new();
+        if has("BHP") {
+            features.push("wheelchair");
+        }
+        if matches!(v.kind.as_str(), "WR" | "W1" | "W2") && !v.not_serving {
+            features.push("restaurant");
+        }
+        if v.kind == "FA" || has("FZ") {
+            features.push("family");
+        }
+        if has("BZ") {
+            features.push("business");
+        }
+        if has("NF") {
+            features.push("low_floor");
+        }
+        if has("VH") || has("VR") {
+            features.push("bike");
+        }
 
-        if class_number.len() >= 2 {
-            // Standard format: "2:9" (class:number)
-            class_val = match class_number[0].parse() {
-                Ok(v) => v,
-                Err(_) => {
-                    if let Some(s) = trailing_sector {
-                        current_sector = s;
-                        if !sectors.contains(&current_sector) { sectors.push(current_sector.clone()); }
-                    }
-                    continue;
-                }
-            };
-            number_val = match class_number[1].parse() {
-                Ok(v) => v,
-                Err(_) => {
-                    if let Some(s) = trailing_sector {
-                        current_sector = s;
-                        if !sectors.contains(&current_sector) { sectors.push(current_sector.clone()); }
-                    }
-                    continue;
-                }
-            };
-        } else if base.len() == 1 {
-            // Short format: just "2" or "1" (class only, no car number)
-            // Use 0 as sentinel — will be resolved in post-processing
-            class_val = match base.parse::<u8>() {
-                Ok(v) if v == 1 || v == 2 => v,
-                _ => {
-                    if let Some(s) = trailing_sector {
-                        current_sector = s;
-                        if !sectors.contains(&current_sector) { sectors.push(current_sector.clone()); }
-                    }
-                    continue;
-                }
-            };
-            number_val = 0;
-        } else if base.len() >= 2 && (base.starts_with('1') || base.starts_with('2')) {
-            // Concatenated format: "12" = class 1, car 2; "23" = class 2, car 3
-            class_val = (base.as_bytes()[0] - b'0') as u8;
-            number_val = match base[1..].parse::<u32>() {
-                Ok(v) => v,
-                _ => (position + 1) as u32,
-            };
-        } else {
-            if let Some(s) = trailing_sector {
-                current_sector = s;
-                if !sectors.contains(&current_sector) { sectors.push(current_sector.clone()); }
-            }
-            continue;
-        };
-
-        position += 1;
+        let position = wagons.len() + 1;
         wagons.push(Wagon {
             position,
-            number: number_val,
-            class: class_val,
-            sector: current_sector.clone(),
-            features,
-            closed,
+            number: v.number.unwrap_or(position as u32),
+            class: if matches!(v.kind.as_str(), "1" | "W1" | "12") { 1 } else { 2 },
+            sector: v.sector.clone(),
+            features: features.into_iter().map(String::from).collect(),
+            closed: v.closed,
+            no_passage_after: false,
+            mixed_class: v.kind == "12",
+            bike_reservation: has("VR"),
+            number_unknown: v.number.is_none(),
         });
-
-        // Update sector after this wagon if there was a trailing @SECTOR
-        if let Some(s) = trailing_sector {
-            current_sector = s;
-            if !sectors.contains(&current_sector) {
-                sectors.push(current_sector.clone());
-            }
-        }
     }
-
-    // Post-process: infer missing car numbers (number == 0) from neighbors
-    for i in 0..wagons.len() {
-        if wagons[i].number == 0 {
-            // Look at neighbors to infer: if prev is N+1 and next is N-1, we're N
-            let prev_num = if i > 0 { Some(wagons[i - 1].number) } else { None };
-            let next_num = if i + 1 < wagons.len() { Some(wagons[i + 1].number) } else { None };
-
-            wagons[i].number = match (prev_num, next_num) {
-                // Descending sequence: prev=4, next=2 → we're 3
-                (Some(p), Some(n)) if p > n && p - n == 2 => p - 1,
-                // Ascending sequence: prev=2, next=4 → we're 3
-                (Some(p), Some(n)) if n > p && n - p == 2 => p + 1,
-                // Only prev available, assume descending
-                (Some(p), _) if p > 1 => p - 1,
-                // Only next available, assume descending
-                (_, Some(n)) => n + 1,
-                // Fallback: use position
-                _ => wagons[i].position as u32,
-            };
-        }
-    }
-
-    // If any car numbers are duplicated (coupled units), use sequential position
-    {
-        let mut seen = std::collections::HashSet::new();
-        let has_duplicates = wagons.iter().any(|w| !seen.insert(w.number));
-        if has_duplicates {
-            for w in wagons.iter_mut() {
-                w.number = w.position as u32;
-            }
-        }
+    // Only a boundary between two passenger cars counts; the train's own ends are open platform
+    if let Some(last) = wagons.last_mut() {
+        last.no_passage_after = false;
     }
 
     (sectors, wagons)
