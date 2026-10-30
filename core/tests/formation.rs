@@ -124,3 +124,11 @@ fn a_plain_car_serialises_with_no_new_keys() {
     assert_eq!(json["noPassageAfter"], true);
     assert_eq!(json["bikeReservation"], true);
 }
+
+#[test]
+fn a_narrow_gauge_unit_keeps_its_own_numbers() {
+    let ws = wagons("@D,F,F,F,F,F,F@C,[(1:711#VH;NF,2:712#VH;NF,2:713#BHP;VH;NF,2):714]@B,F,F,F@A,F,F,F,F");
+    assert_eq!(numbers(&ws), [711, 712, 713, 714]);
+    assert!(ws.iter().all(|w| !w.no_passage_after));
+    assert_eq!(ws[0].class, 1);
+}

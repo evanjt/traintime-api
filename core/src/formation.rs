@@ -48,9 +48,9 @@ pub fn operator_ref_to_evu(op_ref: &str) -> Option<&'static str> {
         "65" => Some("THURBO"), // Thurbo
         "82" => Some("SOB"),    // Südostbahn
         "86" => Some("ZB"),     // Zentralbahn
-        "48" => Some("TPF"),    // Transports publics fribourgeois
-        "39" => Some("TRN"),    // TransN
-        "60" => Some("RhB"),    // Rhätische Bahn
+        "53" => Some("TPF"),    // Transports publics fribourgeois
+        "73" => Some("TRN"),    // TransN
+        "72" => Some("RhB"),    // Rhätische Bahn
         _ => None,              // Unknown or unsupported (RegionAlps=74, MBC, etc.)
     }
 }

@@ -206,3 +206,12 @@ fn operator_ref_accepts_namespaced_form() {
     assert_eq!(operator_ref_to_evu("ojp:33"), Some("BLSP"));
     assert_eq!(operator_ref_to_evu("ojp:74"), None);
 }
+
+#[test]
+fn operator_ref_uses_the_codes_live_departures_carry() {
+    assert_eq!(operator_ref_to_evu("ojp:53"), Some("TPF"));
+    assert_eq!(operator_ref_to_evu("ojp:72"), Some("RhB"));
+    assert_eq!(operator_ref_to_evu("ojp:73"), Some("TRN"));
+    assert_eq!(operator_ref_to_evu("ojp:48"), None);
+    assert_eq!(operator_ref_to_evu("ojp:60"), None);
+}
