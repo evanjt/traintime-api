@@ -12,6 +12,7 @@ mod cache;
 mod formation;
 mod ojp;
 mod ptv;
+mod replica;
 mod routes;
 mod source;
 mod upstream;
@@ -20,7 +21,8 @@ type AxumResponse = axum::http::Response<axum::body::Body>;
 
 #[derive(Clone)]
 pub struct AppState {
-    pub db: Arc<worker::d1::D1Database>,
+    /// D1 reads, served by the nearest replica.
+    pub db: Arc<replica::ReadSession>,
     pub ojp_api_key: String,
     /// OJP_ENDPOINT override. Local burst tests point it at a stub so a run
     /// never reaches SBB.
@@ -154,7 +156,7 @@ async fn fetch(req: HttpRequest, env: Env, _ctx: Context) -> Result<AxumResponse
     }
 
     // Build state
-    let db = env.d1("DB")?;
+    let db = replica::ReadSession::open(env.d1("DB")?)?;
     let ojp_api_key = env
         .secret("OJP_API_KEY")
         .map(|s| s.to_string())
@@ -180,7 +182,7 @@ async fn fetch(req: HttpRequest, env: Env, _ctx: Context) -> Result<AxumResponse
         .unwrap_or(60);
 
     let state = AppState {
-        db: Arc::new(db),
+        db,
         ojp_api_key,
         ojp_endpoint,
         formation_api_key,
@@ -207,6 +209,39 @@ async fn fetch(req: HttpRequest, env: Env, _ctx: Context) -> Result<AxumResponse
                 .unwrap();
             add_cors_headers(&mut resp);
             Ok(resp)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // Every file of the Worker. A new one is added here so the scan below sees it.
+    const SOURCES: &[(&str, &str)] = &[
+        ("lib.rs", include_str!("lib.rs")),
+        ("cache.rs", include_str!("cache.rs")),
+        ("formation.rs", include_str!("formation.rs")),
+        ("ojp.rs", include_str!("ojp.rs")),
+        ("ptv.rs", include_str!("ptv.rs")),
+        ("source.rs", include_str!("source.rs")),
+        ("upstream.rs", include_str!("upstream.rs")),
+        ("routes/mod.rs", include_str!("routes/mod.rs")),
+        ("routes/nearby.rs", include_str!("routes/nearby.rs")),
+        ("routes/departures.rs", include_str!("routes/departures.rs")),
+        ("routes/formation.rs", include_str!("routes/formation.rs")),
+    ];
+
+    // The request state holds only the replica session, so a read site cannot
+    // reach the primary by accident.
+    #[allow(dead_code)]
+    fn state_reads_through_session(state: &super::AppState) -> &super::replica::ReadSession {
+        &state.db
+    }
+
+    #[test]
+    fn only_the_replica_module_names_the_bare_database() {
+        let bare = concat!("D1", "Database");
+        for (name, src) in SOURCES {
+            assert!(!src.contains(bare), "{name} names the bare database handle");
         }
     }
 }

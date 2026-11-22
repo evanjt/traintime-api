@@ -48,7 +48,7 @@ pub async fn handle_nearby(
     // SELECT * so the query works before and after the region columns are added.
     let bound = state.db
         .prepare("SELECT * FROM stations WHERE lat BETWEEN ?1 AND ?2 AND lon BETWEEN ?3 AND ?4")
-        .bind(&[JsValue::from_f64(lat_min), JsValue::from_f64(lat_max), JsValue::from_f64(lon_min), JsValue::from_f64(lon_max)]);
+        .and_then(|s| s.bind(&[JsValue::from_f64(lat_min), JsValue::from_f64(lat_max), JsValue::from_f64(lon_min), JsValue::from_f64(lon_max)]));
 
     let stmt = match bound {
         Ok(s) => s,

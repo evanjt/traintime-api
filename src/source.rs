@@ -47,6 +47,7 @@ async fn station_row(state: &AppState, id: &str) -> Option<StationRow> {
     let stmt = state
         .db
         .prepare("SELECT mode, route_types, stop_ids FROM stations WHERE id = ?1 LIMIT 1")
+        .ok()?
         .bind(&[JsValue::from_str(id)])
         .ok()?;
     stmt.first::<StationRow>(None).await.ok().flatten()
