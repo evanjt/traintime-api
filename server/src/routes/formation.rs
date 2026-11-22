@@ -9,6 +9,7 @@ use crate::formation::fetch_formation;
 use crate::routes::{respond, respond_error};
 use crate::state::AppState;
 use traintime_core::formation::{extract_train_number, operator_ref_to_evu};
+use traintime_core::region::region_for_station_id;
 
 const FORMATION_CACHE_TTL: u64 = 300;
 
@@ -49,6 +50,14 @@ pub async fn handle_formation(
         return respond(
             StatusCode::BAD_REQUEST,
             serde_json::json!({ "error": "Invalid train number" }), None, CacheStatus::None);
+    }
+
+    // A stop in a region without formation data has nothing to look up. With
+    // no stop the train is Swiss, as before regions existed.
+    if !region_for_station_id(params.stop.as_deref().unwrap_or("")).formation {
+        return respond(
+            StatusCode::NOT_FOUND,
+            serde_json::json!({ "error": "No formation data" }), None, CacheStatus::None);
     }
 
     let evu = if let Some(ref e) = params.evu {

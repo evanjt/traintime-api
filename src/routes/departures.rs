@@ -6,9 +6,11 @@ use traintime_core::CacheStatus;
 use worker::console_log;
 
 use crate::cache::{self, Cached};
-use crate::ojp::{fetch_departures, FlatDeparture};
+use crate::ojp::FlatDeparture;
+use crate::source::fetch_departures_for;
 use crate::routes::{respond, respond_error};
 use crate::AppState;
+use traintime_core::region::region_for_station_id;
 use traintime_core::favourites::{parse_favourites, partition_favourites};
 
 #[derive(Deserialize)]
@@ -42,6 +44,7 @@ pub async fn handle_departures(
 
     // Always fetch 50 to populate cache; partition down to `limit` on return
     let fetch_limit = 50u32;
+    let region = region_for_station_id(&station_id);
     let cache_key = format!("departures:{station_id}:{fetch_limit}");
     let mut cache;
     let (json, stale) = match cache::get(&cache_key, state.cache_ttl).await {
@@ -53,7 +56,7 @@ pub async fn handle_departures(
         cached => {
             console_log!("CACHE MISS {}", cache_key);
             cache = CacheStatus::Miss;
-            match fetch_departures(&state.ojp_endpoint, &state.ojp_api_key, &station_id, fetch_limit).await {
+            match fetch_departures_for(&state, region, &station_id, fetch_limit).await {
                 Ok(departures) => {
                     let json = serde_json::to_string(&departures).unwrap_or_default();
                     cache::put(&cache_key, &json, state.cache_ttl).await;

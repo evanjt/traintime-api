@@ -7,10 +7,12 @@ use wasm_bindgen::JsValue;
 use worker::console_log;
 
 use crate::cache::{self, Cached};
-use crate::ojp::{fetch_departures, FlatDeparture};
+use crate::ojp::FlatDeparture;
+use crate::source::fetch_departures_for;
 use crate::routes::respond;
 use crate::AppState;
 use traintime_core::geo::bounding_box;
+use traintime_core::region::region_for_station_id;
 use traintime_core::stations::{default_station_id, group_nearby, Station};
 
 #[derive(Deserialize)]
@@ -89,6 +91,7 @@ pub async fn handle_nearby(
     let mut stale = None;
     let mut cache = CacheStatus::None;
     if let Some(id) = default_id {
+        let region = region_for_station_id(&id);
         let cache_key = format!("departures:{id}:{fetch_limit}");
         let json = match cache::get(&cache_key, state.cache_ttl).await {
             Cached::Fresh(v) => {
@@ -99,7 +102,7 @@ pub async fn handle_nearby(
             cached => {
                 console_log!("CACHE MISS {}", cache_key);
                 cache = CacheStatus::Miss;
-                match fetch_departures(&state.ojp_endpoint, &state.ojp_api_key, &id, fetch_limit).await {
+                match fetch_departures_for(&state, region, &id, fetch_limit).await {
                     Ok(fetched) => {
                         let json = serde_json::to_string(&fetched).unwrap_or_default();
                         cache::put(&cache_key, &json, state.cache_ttl).await;

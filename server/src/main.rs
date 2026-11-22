@@ -16,6 +16,7 @@ mod formation;
 mod memcached;
 mod ojp;
 mod routes;
+mod source;
 mod state;
 mod stations;
 

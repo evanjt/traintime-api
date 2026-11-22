@@ -5,10 +5,11 @@ use serde::Deserialize;
 use traintime_core::CacheStatus;
 
 use crate::fetch::Fetched;
-use crate::ojp::fetch_departures;
+use crate::source::fetch_departures_for;
 use crate::routes::respond;
 use crate::state::AppState;
 use traintime_core::ojp::FlatDeparture;
+use traintime_core::region::region_for_station_id;
 use traintime_core::stations::{default_station_id, group_nearby};
 
 #[derive(Deserialize)]
@@ -47,11 +48,12 @@ pub async fn handle_nearby(
     let mut stale = None;
     let mut cache = CacheStatus::None;
     if let Some(id) = default_id {
+        let region = region_for_station_id(&id);
         let cache_key = format!("departures:{id}:{fetch_limit}");
         let fetched = state
             .inflight
             .cached(&state.cache, &cache_key, state.cache_ttl, || async {
-                let deps = fetch_departures(&state.http, &state.ojp_endpoint, &state.ojp_api_key, &id, fetch_limit).await?;
+                let deps = fetch_departures_for(&state, region, &id, fetch_limit).await?;
                 Ok(serde_json::to_string(&deps).unwrap_or_default())
             })
             .await;

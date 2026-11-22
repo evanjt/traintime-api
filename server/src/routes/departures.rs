@@ -5,11 +5,12 @@ use serde::Deserialize;
 use traintime_core::CacheStatus;
 
 use crate::fetch::Fetched;
-use crate::ojp::fetch_departures;
+use crate::source::fetch_departures_for;
 use crate::routes::{respond, respond_error};
 use crate::state::AppState;
 use traintime_core::favourites::{parse_favourites, partition_favourites};
 use traintime_core::ojp::FlatDeparture;
+use traintime_core::region::region_for_station_id;
 
 #[derive(Deserialize)]
 pub struct DeparturesQuery {
@@ -41,11 +42,12 @@ pub async fn handle_departures(
 
     // Always fetch 50 to populate cache; partition down to `limit` on return
     let fetch_limit = 50u32;
+    let region = region_for_station_id(&station_id);
     let cache_key = format!("departures:{station_id}:{fetch_limit}");
     let fetched = state
         .inflight
         .cached(&state.cache, &cache_key, state.cache_ttl, || async {
-            let deps = fetch_departures(&state.http, &state.ojp_endpoint, &state.ojp_api_key, &station_id, fetch_limit).await?;
+            let deps = fetch_departures_for(&state, region, &station_id, fetch_limit).await?;
             Ok(serde_json::to_string(&deps).unwrap_or_default())
         })
         .await;
