@@ -1,6 +1,7 @@
 use serde::Serialize;
 
 use crate::error::CoreError;
+use crate::upstream::{ErrorResponse, UpstreamError};
 
 pub const FORMATION_ENDPOINT: &str =
     "https://api.opentransportdata.swiss/formation/v1/formations_stop_based";
@@ -241,4 +242,55 @@ pub fn parse_formation_response(
         sectors,
         wagons,
     })
+}
+
+/// Why a formation request has nothing to show.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FormationError {
+    /// The service has no formation for this train or stop.
+    NoData(String),
+    Upstream(UpstreamError),
+}
+
+impl FormationError {
+    /// The service answers 404 for a train it has no formation for. Every
+    /// other non-2xx is an outage.
+    pub fn check_status(status: u16) -> Result<(), FormationError> {
+        if status == 404 {
+            return Err(FormationError::NoData(format!("formation service answered {status}")));
+        }
+        UpstreamError::check_status(status).map_err(FormationError::Upstream)
+    }
+
+    pub fn response(&self) -> ErrorResponse {
+        match self {
+            FormationError::NoData(_) => ErrorResponse {
+                status: 404,
+                retry_after: None,
+                body: serde_json::json!({ "error": "No formation data" }),
+            },
+            FormationError::Upstream(e) => e.response(),
+        }
+    }
+}
+
+impl From<UpstreamError> for FormationError {
+    fn from(e: UpstreamError) -> Self {
+        FormationError::Upstream(e)
+    }
+}
+
+impl From<CoreError> for FormationError {
+    fn from(e: CoreError) -> Self {
+        FormationError::NoData(e.to_string())
+    }
+}
+
+impl std::fmt::Display for FormationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FormationError::NoData(e) => write!(f, "no formation data: {e}"),
+            FormationError::Upstream(e) => e.fmt(f),
+        }
+    }
 }

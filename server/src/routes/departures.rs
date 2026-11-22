@@ -6,7 +6,7 @@ use traintime_core::CacheStatus;
 
 use crate::fetch::Fetched;
 use crate::ojp::fetch_departures;
-use crate::routes::respond;
+use crate::routes::{respond, respond_error};
 use crate::state::AppState;
 use traintime_core::favourites::{parse_favourites, partition_favourites};
 use traintime_core::ojp::FlatDeparture;
@@ -46,7 +46,7 @@ pub async fn handle_departures(
         .inflight
         .cached(&state.cache, &cache_key, state.cache_ttl, || async {
             let deps = fetch_departures(&state.http, &state.ojp_endpoint, &state.ojp_api_key, &station_id, fetch_limit).await?;
-            serde_json::to_string(&deps).map_err(|e| e.to_string())
+            Ok(serde_json::to_string(&deps).unwrap_or_default())
         })
         .await;
     let cache = fetched.cache_status();
@@ -54,7 +54,8 @@ pub async fn handle_departures(
         Fetched::Fresh(v) | Fetched::Cached(v) => (v, None),
         Fetched::Stale(v, age) => (v, Some(age)),
         Fetched::Failed(e) => {
-            return respond(StatusCode::INTERNAL_SERVER_ERROR, serde_json::json!({ "error": e }), None, cache);
+            println!("Departures error: {e}");
+            return respond_error(e.response(), cache);
         }
     };
     let departures: Vec<FlatDeparture> = match serde_json::from_str(&json) {
@@ -72,4 +73,33 @@ pub async fn handle_departures(
     let mut departures = departures;
     departures.truncate(limit as usize);
     respond(StatusCode::OK, serde_json::json!({ "departures": departures }), stale, cache)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::routing::post;
+    use axum::Router;
+
+    async fn stub_ojp(status: StatusCode) -> String {
+        let app = Router::new().route("/ojp20", post(move || async move { (status, "gateway error") }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        format!("http://{addr}/ojp20")
+    }
+
+    #[tokio::test]
+    async fn ojp_502_answers_503_upstream_unavailable() {
+        let state = AppState::for_test(&stub_ojp(StatusCode::BAD_GATEWAY).await);
+        let query = DeparturesQuery { id: Some("8507000".into()), limit: None, favourites: None };
+
+        let resp = handle_departures(State(state), Query(query)).await;
+
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(resp.headers().get("retry-after").unwrap(), "30");
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body, serde_json::json!({ "error": "upstream_unavailable" }));
+    }
 }

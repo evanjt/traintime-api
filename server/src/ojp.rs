@@ -1,4 +1,5 @@
 use traintime_core::ojp::{build_stop_event_request_xml, parse_stop_events, FlatDeparture};
+use traintime_core::UpstreamError;
 
 /// Parse ISO timestamp string to unix milliseconds.
 ///
@@ -23,7 +24,7 @@ pub async fn fetch_departures(
     api_key: &str,
     stop_ref: &str,
     limit: u32,
-) -> Result<Vec<FlatDeparture>, String> {
+) -> Result<Vec<FlatDeparture>, UpstreamError> {
     let now = chrono::Utc::now();
     let body = build_stop_event_request_xml(
         stop_ref,
@@ -41,7 +42,7 @@ pub async fn fetch_departures(
         .body(body)
         .send()
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(request_error)?;
 
     let status = resp.status().as_u16();
     println!(
@@ -51,12 +52,21 @@ pub async fn fetch_departures(
         start.elapsed().as_millis()
     );
 
-    if status != 200 {
-        return Err(format!("OJP API error: {status}"));
-    }
+    UpstreamError::check_status(status)?;
 
-    let xml = resp.text().await.map_err(|e| e.to_string())?;
+    let xml = resp.text().await.map_err(request_error)?;
     Ok(parse_stop_events(&xml, iso_to_ms))
+}
+
+/// A send or body read that failed, by whether the client's timeout fired.
+pub fn request_error(e: reqwest::Error) -> UpstreamError {
+    if e.is_timeout() {
+        UpstreamError::Timeout
+    } else if e.is_decode() {
+        UpstreamError::Unparseable(e.to_string())
+    } else {
+        UpstreamError::Unreachable(e.to_string())
+    }
 }
 
 #[cfg(test)]

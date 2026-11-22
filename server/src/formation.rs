@@ -1,4 +1,9 @@
-use traintime_core::formation::{parse_formation_response, FormationResult, FORMATION_ENDPOINT};
+use traintime_core::formation::{
+    parse_formation_response, FormationError, FormationResult, FORMATION_ENDPOINT,
+};
+use traintime_core::UpstreamError;
+
+use crate::ojp::request_error;
 
 pub async fn fetch_formation(
     http: &reqwest::Client,
@@ -7,7 +12,7 @@ pub async fn fetch_formation(
     date: &str,
     train_number: &str,
     stop_uic: Option<&str>,
-) -> Result<FormationResult, String> {
+) -> Result<FormationResult, FormationError> {
     let url =
         format!("{FORMATION_ENDPOINT}?evu={evu}&operationDate={date}&trainNumber={train_number}");
 
@@ -19,7 +24,7 @@ pub async fn fetch_formation(
         .header("Accept", "application/json")
         .send()
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(request_error)?;
 
     let status = resp.status().as_u16();
     println!(
@@ -30,11 +35,11 @@ pub async fn fetch_formation(
         start.elapsed().as_millis()
     );
 
-    if status != 200 {
-        return Err(format!("Formation API error: {status}"));
-    }
+    FormationError::check_status(status)?;
 
-    let body: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    let text = resp.text().await.map_err(request_error)?;
+    let body: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| UpstreamError::Unparseable(e.to_string()))?;
 
-    parse_formation_response(&body, stop_uic).map_err(|e| e.to_string())
+    Ok(parse_formation_response(&body, stop_uic)?)
 }

@@ -24,6 +24,11 @@ impl Stations {
         Ok(Self { rows })
     }
 
+    #[cfg(test)]
+    pub fn from_rows(rows: Vec<Station>) -> Self {
+        Self { rows }
+    }
+
     pub fn len(&self) -> usize {
         self.rows.len()
     }

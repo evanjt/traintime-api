@@ -185,6 +185,7 @@ async fn run() -> Result<(), String> {
     let state = AppState {
         cache,
         inflight: fetch::Inflight::default(),
+        formation_inflight: fetch::Inflight::default(),
         db: Arc::new(db),
         http: reqwest::Client::builder()
             .user_agent("traintime/1.0")

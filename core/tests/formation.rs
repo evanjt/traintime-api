@@ -2,7 +2,7 @@
 //! Cars run front first; `(` and `)` close a unit to its neighbour; the type gives the
 //! class and the restaurant; `-` is closed, `%` a restaurant open but not serving.
 
-use traintime_core::{parse_formation_short_string, Wagon};
+use traintime_core::{parse_formation_short_string, CoreError, FormationError, UpstreamError, Wagon};
 
 const IC708_BERN: &str =
     "@H,F,[(FA:18#KW;NF,2:17#VR;KW;NF@G,2:16#VR;KW;NF,2:15#BHP;NF@F,%W2:14#BHP;NF,1:13#VR;NF@E,1:12#VR;KW;NF,1):11#VR;BZ;NF@D,(FA:8#KW;NF,2:7#VR;KW;NF@C,2:6#VR;KW;NF@B,2:5#BHP;NF,W2:4#BHP;NF,1:3#VR;NF@A,1:2#VR;KW;NF,1):1#VR;BZ;NF],F";
@@ -131,4 +131,28 @@ fn a_narrow_gauge_unit_keeps_its_own_numbers() {
     assert_eq!(numbers(&ws), [711, 712, 713, 714]);
     assert!(ws.iter().all(|w| !w.no_passage_after));
     assert_eq!(ws[0].class, 1);
+}
+
+#[test]
+fn formation_404_is_no_data_and_any_other_failure_is_upstream_unavailable() {
+    let no_data = FormationError::check_status(404).unwrap_err();
+    assert_eq!(no_data.response().status, 404);
+    assert_eq!(no_data.response().retry_after, None);
+    assert_eq!(no_data.response().body, serde_json::json!({ "error": "No formation data" }));
+
+    let not_found_stop = FormationError::from(CoreError::StopNotFound("8507000".into()));
+    assert_eq!(not_found_stop.response().status, 404);
+
+    assert_eq!(FormationError::check_status(200), Ok(()));
+    for e in [
+        FormationError::check_status(502).unwrap_err(),
+        FormationError::check_status(500).unwrap_err(),
+        FormationError::from(UpstreamError::Timeout),
+        FormationError::from(UpstreamError::Unparseable("eof".into())),
+    ] {
+        let r = e.response();
+        assert_eq!(r.status, 503, "{e}");
+        assert_eq!(r.retry_after, Some(30), "{e}");
+        assert_eq!(r.body, serde_json::json!({ "error": "upstream_unavailable" }), "{e}");
+    }
 }

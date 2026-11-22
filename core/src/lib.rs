@@ -14,6 +14,7 @@ pub mod geo;
 pub mod ojp;
 pub mod reqlog;
 pub mod stations;
+pub mod upstream;
 
 pub use auth::ApiKeys;
 pub use cache::{classify, CachedPayload, Freshness, STALE_MAX_AGE_SECS};
@@ -21,7 +22,7 @@ pub use error::CoreError;
 pub use favourites::{parse_favourites, partition_favourites};
 pub use formation::{
     extract_train_number, operator_ref_to_evu, parse_formation_response,
-    parse_formation_short_string, FormationResult, Wagon, FORMATION_ENDPOINT,
+    parse_formation_short_string, FormationError, FormationResult, Wagon, FORMATION_ENDPOINT,
 };
 pub use geo::{bounding_box, haversine_distance, MAX_DISTANCE, MAX_PER_MODE};
 pub use reqlog::{format_line, route_template, CacheStatus};
@@ -29,3 +30,4 @@ pub use ojp::{
     build_stop_event_request_xml, parse_stop_events, FlatDeparture, OJP_ENDPOINT,
 };
 pub use stations::{default_station_id, group_nearby, ModeGroups, NearbyStation, Station};
+pub use upstream::{ErrorResponse, UpstreamError, RETRY_AFTER_SECS, UPSTREAM_UNAVAILABLE};

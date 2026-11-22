@@ -7,7 +7,7 @@ use worker::console_log;
 
 use crate::cache::{self, Cached};
 use crate::formation::fetch_formation;
-use crate::routes::respond;
+use crate::routes::{respond, respond_error};
 use crate::AppState;
 use traintime_core::formation::{extract_train_number, operator_ref_to_evu};
 
@@ -102,9 +102,7 @@ pub async fn handle_formation(
                     }
                     _ => {
                         console_log!("Formation error: {}", e);
-                        return respond(
-                            StatusCode::NOT_FOUND,
-                            serde_json::json!({ "error": "No formation data" }), None, cache);
+                        return respond_error(e.response(), cache);
                     }
                 },
             }

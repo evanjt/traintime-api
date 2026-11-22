@@ -6,7 +6,7 @@ use traintime_core::CacheStatus;
 
 use crate::fetch::Fetched;
 use crate::formation::fetch_formation;
-use crate::routes::respond;
+use crate::routes::{respond, respond_error};
 use crate::state::AppState;
 use traintime_core::formation::{extract_train_number, operator_ref_to_evu};
 
@@ -69,7 +69,7 @@ pub async fn handle_formation(
     let cache_key = format!("formation:{evu}:{date}:{train_number}:{stop_key}");
 
     let fetched = state
-        .inflight
+        .formation_inflight
         .cached(&state.cache, &cache_key, FORMATION_CACHE_TTL, || async {
             let result = fetch_formation(
                 &state.http,
@@ -80,7 +80,7 @@ pub async fn handle_formation(
                 params.stop.as_deref(),
             )
             .await?;
-            serde_json::to_string(&result).map_err(|e| e.to_string())
+            Ok(serde_json::to_string(&result).unwrap_or_default())
         })
         .await;
     let cache = fetched.cache_status();
@@ -89,9 +89,7 @@ pub async fn handle_formation(
         Fetched::Stale(v, age) => (v, Some(age)),
         Fetched::Failed(e) => {
             println!("Formation error: {e}");
-            return respond(
-                StatusCode::NOT_FOUND,
-                serde_json::json!({ "error": "No formation data" }), None, cache);
+            return respond_error(e.response(), cache);
         }
     };
     match serde_json::from_str::<serde_json::Value>(&json) {

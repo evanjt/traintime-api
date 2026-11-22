@@ -7,7 +7,7 @@ use worker::console_log;
 
 use crate::cache::{self, Cached};
 use crate::ojp::{fetch_departures, FlatDeparture};
-use crate::routes::respond;
+use crate::routes::{respond, respond_error};
 use crate::AppState;
 use traintime_core::favourites::{parse_favourites, partition_favourites};
 
@@ -66,9 +66,8 @@ pub async fn handle_departures(
                         (v, Some(age))
                     }
                     _ => {
-                        return respond(
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            serde_json::json!({ "error": e.to_string() }), None, cache);
+                        console_log!("Departures error: {}", e);
+                        return respond_error(e.response(), cache);
                     }
                 },
             }
