@@ -3,3 +3,6 @@ OJP_API_KEY=
 API_KEY=
 # Comma-separated list of accepted client keys
 API_KEYS=
+# PTV Timetable API v3 developer id and key. Unset, Victorian stations answer 503.
+PTV_DEVID=
+PTV_KEY=

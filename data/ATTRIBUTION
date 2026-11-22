@@ -3,3 +3,9 @@ published by the Swiss Federal Office of Transport (FOT) under the
 "Open use. Must provide the source." license.
 
 Source: https://opendata.swiss/en/dataset/haltestellen-des-offentlichen-verkehrs
+
+stations-au-vic.json contains data from the GTFS Schedule dataset.
+Source: Licensed from Public Transport Victoria under a Creative Commons
+Attribution 4.0 International Licence.
+
+Source: https://opendata.transport.vic.gov.au/dataset/gtfs-schedule

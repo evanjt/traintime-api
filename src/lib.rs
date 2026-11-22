@@ -11,6 +11,7 @@ use traintime_core::{auth, format_line, ApiKeys, CacheStatus};
 mod cache;
 mod formation;
 mod ojp;
+mod ptv;
 mod routes;
 mod source;
 mod upstream;
@@ -25,6 +26,11 @@ pub struct AppState {
     /// never reaches SBB.
     pub ojp_endpoint: String,
     pub formation_api_key: String,
+    /// PTV_ENDPOINT override, for the same reason as OJP_ENDPOINT.
+    pub ptv_endpoint: String,
+    /// PTV_DEVID and PTV_KEY. Unset, Victorian stations answer 503.
+    pub ptv_devid: Option<String>,
+    pub ptv_key: Option<String>,
     pub cache_ttl: u64,
 }
 
@@ -81,6 +87,14 @@ fn add_cors_headers(resp: &mut AxumResponse) {
         "Content-Type, X-API-Key".parse().unwrap(),
     );
     h.insert("x-api-version", "1".parse().unwrap());
+}
+
+/// A secret, or a plain var for local runs, or nothing.
+fn optional_secret(env: &Env, name: &str) -> Option<String> {
+    env.secret(name)
+        .map(|s| s.to_string())
+        .or_else(|_| env.var(name).map(|v| v.to_string()))
+        .ok()
 }
 
 #[event(fetch)]
@@ -153,6 +167,12 @@ async fn fetch(req: HttpRequest, env: Env, _ctx: Context) -> Result<AxumResponse
         .secret("FORMATION_API_KEY")
         .map(|s| s.to_string())
         .or_else(|_| env.var("FORMATION_API_KEY").map(|v| v.to_string()))?;
+    let ptv_endpoint = env
+        .var("PTV_ENDPOINT")
+        .map(|v| v.to_string())
+        .unwrap_or_else(|_| traintime_core::ptv::PTV_ENDPOINT.to_string());
+    let ptv_devid = optional_secret(&env, "PTV_DEVID");
+    let ptv_key = optional_secret(&env, "PTV_KEY");
     let cache_ttl = env
         .var("DEPARTURE_CACHE_TTL")
         .ok()
@@ -164,6 +184,9 @@ async fn fetch(req: HttpRequest, env: Env, _ctx: Context) -> Result<AxumResponse
         ojp_api_key,
         ojp_endpoint,
         formation_api_key,
+        ptv_endpoint,
+        ptv_devid,
+        ptv_key,
         cache_ttl,
     };
 

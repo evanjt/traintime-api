@@ -15,6 +15,7 @@ mod fetch;
 mod formation;
 mod memcached;
 mod ojp;
+mod ptv;
 mod routes;
 mod source;
 mod state;
@@ -199,6 +200,10 @@ async fn run() -> Result<(), String> {
             .unwrap_or_else(|_| traintime_core::ojp::OJP_ENDPOINT.to_string()),
         ojp_api_key: required_env("OJP_API_KEY")?,
         formation_api_key: required_env("FORMATION_API_KEY")?,
+        ptv_endpoint: std::env::var("PTV_ENDPOINT")
+            .unwrap_or_else(|_| traintime_core::ptv::PTV_ENDPOINT.to_string()),
+        ptv_devid: std::env::var("PTV_DEVID").ok(),
+        ptv_key: std::env::var("PTV_KEY").ok(),
         cache_ttl: std::env::var("DEPARTURE_CACHE_TTL")
             .ok()
             .and_then(|v| v.parse().ok())

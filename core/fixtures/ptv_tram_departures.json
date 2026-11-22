@@ -1,0 +1,21 @@
+{
+  "departures": [
+    {"stop_id": 2496, "route_id": 3343, "run_id": -1, "run_ref": "40-016--1-MF2-60", "direction_id": 28, "disruption_ids": [], "scheduled_departure_utc": "2026-11-22T09:10:00Z", "estimated_departure_utc": "2026-11-22T09:09:00Z", "at_platform": false, "platform_number": null, "flags": "", "departure_sequence": 0},
+    {"stop_id": 2496, "route_id": 1083, "run_id": -1, "run_ref": "40-064--1-MF2-11", "direction_id": 68, "disruption_ids": [], "scheduled_departure_utc": "2026-11-22T09:03:00Z", "estimated_departure_utc": "2026-11-22T09:07:40Z", "at_platform": false, "platform_number": null, "flags": "", "departure_sequence": 0}
+  ],
+  "stops": {},
+  "routes": {
+    "3343": {"route_type": 1, "route_id": 3343, "route_name": "Melbourne University - St Kilda Beach", "route_number": "16", "route_gtfs_id": "3-16"},
+    "1083": {"route_type": 1, "route_id": 1083, "route_name": "Melbourne University - Carnegie", "route_number": "67", "route_gtfs_id": "3-67"}
+  },
+  "runs": {
+    "40-016--1-MF2-60": {"run_id": -1, "run_ref": "40-016--1-MF2-60", "route_id": 3343, "route_type": 1, "final_stop_id": 2850, "destination_name": "St Kilda Beach/Fitzroy St #136", "status": "scheduled", "direction_id": 28},
+    "40-064--1-MF2-11": {"run_id": -1, "run_ref": "40-064--1-MF2-11", "route_id": 1083, "route_type": 1, "final_stop_id": 3010, "destination_name": "Carnegie/Truganini Rd #68", "status": "scheduled", "direction_id": 68}
+  },
+  "directions": {
+    "28": {"direction_id": 28, "direction_name": "St Kilda Beach", "route_id": 3343, "route_type": 1},
+    "68": {"direction_id": 68, "direction_name": "Carnegie", "route_id": 1083, "route_type": 1}
+  },
+  "disruptions": {},
+  "status": {"version": "3.0", "health": 1}
+}

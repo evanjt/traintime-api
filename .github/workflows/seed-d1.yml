@@ -6,7 +6,7 @@ on:
     branches:
       - main
     paths:
-      - 'data/stations.json'
+      - 'data/stations*.json'
   workflow_dispatch:
 
 jobs:

@@ -80,8 +80,10 @@ pub async fn handle_departures(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::routing::post;
+    use axum::extract::{Path, RawQuery};
+    use axum::routing::{get, post};
     use axum::Router;
+    use traintime_core::stations::Station;
 
     async fn stub_ojp(status: StatusCode) -> String {
         let app = Router::new().route("/ojp20", post(move || async move { (status, "gateway error") }));
@@ -102,6 +104,129 @@ mod tests {
         assert_eq!(resp.headers().get("retry-after").unwrap(), "30");
         let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body, serde_json::json!({ "error": "upstream_unavailable" }));
+    }
+
+    const PTV_TRAINS: &str = include_str!("../../../core/fixtures/ptv_train_departures.json");
+
+    // Serves the recorded metro board for route type 0, an empty V/Line board
+    // for 3, and refuses any request without a signature.
+    async fn stub_ptv() -> String {
+        let app = Router::new().route(
+            "/v3/departures/route_type/{rt}/stop/{stop}",
+            get(|Path((rt, stop)): Path<(u8, String)>, RawQuery(q): RawQuery| async move {
+                let q = q.unwrap_or_default();
+                if stop != "1105" || !q.contains("devid=3000123") || !q.contains("&signature=") {
+                    return (StatusCode::FORBIDDEN, String::new());
+                }
+                match rt {
+                    0 => (StatusCode::OK, PTV_TRAINS.to_string()),
+                    _ => (StatusCode::OK, r#"{"departures":[]}"#.to_string()),
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        format!("http://{addr}")
+    }
+
+    fn jordanville() -> Station {
+        Station { id: "au-vic-1105".into(), name: "Jordanville".into(), lat: -37.8735, lon: 145.1203, mode: "train".into(), route_types: None, stop_ids: None }
+    }
+
+    async fn departures_body(state: AppState, id: &str) -> (StatusCode, serde_json::Value) {
+        let query = DeparturesQuery { id: Some(id.into()), limit: Some(10), favourites: None };
+        let resp = handle_departures(State(state), Query(query)).await;
+        let status = resp.status();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        (status, serde_json::from_slice(&body).unwrap())
+    }
+
+    #[tokio::test]
+    async fn victorian_station_answers_from_ptv() {
+        let state = AppState::for_test("http://127.0.0.1:9/ojp20")
+            .with_ptv(&stub_ptv().await, "3000123", "key")
+            .with_stations(vec![jordanville()]);
+
+        let (status, body) = departures_body(state, "au-vic-1105").await;
+
+        assert_eq!(status, StatusCode::OK);
+        let rows = body["departures"].as_array().unwrap();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0]["to"], "City (Flinders Street)");
+        assert_eq!(rows[0]["category"], "Metro");
+        assert_eq!(rows[0]["delay"], 3);
+        assert_eq!(rows[0]["platform"], "1");
+    }
+
+    const PTV_TRAMS: &str = include_str!("../../../core/fixtures/ptv_tram_departures.json");
+
+    // A tram stop whose two platforms are separate PTV stops. Each serves one
+    // direction, and every request is recorded as "route_type/stop".
+    async fn stub_ptv_two_platforms() -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = asked.clone();
+        let app = Router::new().route(
+            "/v3/departures/route_type/{rt}/stop/{stop}",
+            get(move |Path((rt, stop)): Path<(u8, String)>| {
+                let log = log.clone();
+                async move {
+                    log.lock().unwrap().push(format!("{rt}/{stop}"));
+                    match stop.as_str() {
+                        "7001" => (StatusCode::OK, PTV_TRAMS.to_string()),
+                        "7002" => (
+                            StatusCode::OK,
+                            PTV_TRAMS
+                                .replace("\"direction_name\": \"St Kilda Beach\"", "\"direction_name\": \"Melbourne University\"")
+                                .replace("\"direction_name\": \"Carnegie\"", "\"direction_name\": \"Melbourne University\"")
+                                .replace("09:10:00Z", "09:06:00Z")
+                                .replace("09:03:00Z", "09:12:00Z"),
+                        ),
+                        _ => (StatusCode::NOT_FOUND, String::new()),
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (format!("http://{addr}"), asked)
+    }
+
+    #[tokio::test]
+    async fn merged_tram_stop_asks_both_stops_and_shows_both_directions() {
+        let (endpoint, asked) = stub_ptv_two_platforms().await;
+        let stop = Station {
+            id: "au-vic-7001".into(),
+            name: "Example Rd/Sample St".into(),
+            lat: -37.8,
+            lon: 144.97,
+            mode: "tram".into(),
+            route_types: Some("1".into()),
+            stop_ids: Some("7001,7002".into()),
+        };
+        let state = AppState::for_test("http://127.0.0.1:9/ojp20")
+            .with_ptv(&endpoint, "3000123", "key")
+            .with_stations(vec![stop]);
+
+        let (status, body) = departures_body(state, "au-vic-7001").await;
+
+        assert_eq!(status, StatusCode::OK);
+        let mut calls = asked.lock().unwrap().clone();
+        calls.sort();
+        assert_eq!(calls, vec!["1/7001", "1/7002"]);
+        let to: Vec<&str> = body["departures"].as_array().unwrap().iter().map(|r| r["to"].as_str().unwrap()).collect();
+        assert_eq!(to, vec!["Carnegie", "Melbourne University", "St Kilda Beach", "Melbourne University"]);
+    }
+
+    #[tokio::test]
+    async fn victorian_station_without_ptv_credentials_answers_503() {
+        let state = AppState::for_test("http://127.0.0.1:9/ojp20").with_stations(vec![jordanville()]);
+
+        let (status, body) = departures_body(state, "au-vic-1105").await;
+
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(body, serde_json::json!({ "error": "upstream_unavailable" }));
     }
 }

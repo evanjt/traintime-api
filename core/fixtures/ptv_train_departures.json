@@ -1,0 +1,23 @@
+{
+  "departures": [
+    {"stop_id": 1105, "route_id": 2, "run_id": -1, "run_ref": "955101", "direction_id": 1, "disruption_ids": [], "scheduled_departure_utc": "2026-11-22T09:20:00Z", "estimated_departure_utc": null, "at_platform": false, "platform_number": "2", "flags": "S_WCA", "departure_sequence": 0},
+    {"stop_id": 1105, "route_id": 2, "run_id": -1, "run_ref": "955033", "direction_id": 1, "disruption_ids": [], "scheduled_departure_utc": "2026-11-22T09:05:00Z", "estimated_departure_utc": "2026-11-22T09:08:20Z", "at_platform": false, "platform_number": "1", "flags": "S_WCA", "departure_sequence": 0},
+    {"stop_id": 1105, "route_id": 7, "run_id": -1, "run_ref": "955207", "direction_id": 6, "disruption_ids": [], "scheduled_departure_utc": "2026-11-22T09:12:00Z", "estimated_departure_utc": "2026-11-22T09:12:00Z", "at_platform": true, "platform_number": "2", "flags": "", "departure_sequence": 0}
+  ],
+  "stops": {},
+  "routes": {
+    "2": {"route_type": 0, "route_id": 2, "route_name": "Belgrave", "route_number": "", "route_gtfs_id": "2-BEG"},
+    "7": {"route_type": 0, "route_id": 7, "route_name": "Glen Waverley", "route_number": "", "route_gtfs_id": "2-GLW"}
+  },
+  "runs": {
+    "955101": {"run_id": -1, "run_ref": "955101", "route_id": 2, "route_type": 0, "final_stop_id": 1071, "destination_name": "Flinders Street", "status": "scheduled", "direction_id": 1},
+    "955033": {"run_id": -1, "run_ref": "955033", "route_id": 2, "route_type": 0, "final_stop_id": 1071, "destination_name": "Flinders Street", "status": "scheduled", "direction_id": 1},
+    "955207": {"run_id": -1, "run_ref": "955207", "route_id": 7, "route_type": 0, "final_stop_id": 1080, "destination_name": "Glen Waverley", "status": "scheduled", "direction_id": 6}
+  },
+  "directions": {
+    "1": {"direction_id": 1, "direction_name": "City (Flinders Street)", "route_id": 2, "route_type": 0},
+    "6": {"direction_id": 6, "direction_name": "Glen Waverley", "route_id": 7, "route_type": 0}
+  },
+  "disruptions": {},
+  "status": {"version": "3.0", "health": 1}
+}

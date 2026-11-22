@@ -41,8 +41,9 @@ RUN apk --no-cache upgrade && \
     adduser -D -u 10001 traintime
 WORKDIR /app
 COPY --from=builder /build/server/target/release/traintime-server /usr/local/bin/traintime-server
-# Own layer, so the monthly station-data commit rebuilds only this.
-COPY data/stations.json /app/stations.json
+# Own layer, so a station-data commit rebuilds only this. The server loads
+# every stations*.json beside STATIONS_PATH.
+COPY data/stations*.json /app/
 ENV PORT=8080 \
     STATIONS_PATH=/app/stations.json
 USER 10001

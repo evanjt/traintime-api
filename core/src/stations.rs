@@ -12,6 +12,14 @@ pub struct Station {
     pub lat: f64,
     pub lon: f64,
     pub mode: String,
+    /// Upstream route types to ask for departures, comma separated. Absent
+    /// for regions whose source answers every mode in one call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route_types: Option<String>,
+    /// Upstream stop ids whose departures make up this station, comma
+    /// separated, when one station merges several stops.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_ids: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

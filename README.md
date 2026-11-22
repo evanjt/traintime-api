@@ -12,7 +12,11 @@ npx wrangler dev
 
 ## Data
 
-Station data from the [SBB Didok dataset](https://opendata.swiss/en/dataset/haltestellen-des-offentlichen-verkehrs) (Swiss Federal Office of Transport, "Open use. Must provide the source."). Updated monthly via GitHub Actions.
+Station data from the [SBB Didok dataset](https://opendata.swiss/en/dataset/haltestellen-des-offentlichen-verkehrs) (Swiss Federal Office of Transport, "Open use. Must provide the source."). Updated monthly via GitHub Actions into `data/stations.json`.
+
+Each other region keeps its own `data/stations-<region>.json`, so the Didok update never touches it. `scripts/fetch-stations-au-vic.sh` writes the Victorian file from the [GTFS Schedule](https://opendata.transport.vic.gov.au/dataset/gtfs-schedule) (CC BY 4.0, Public Transport Victoria). The native server, `seed_d1.sh` and the D1 seed workflow read every `data/stations*.json`. Apply `migrations/m20261122_203316_add_station_routes.sql` to D1 before seeding rows that carry `route_types`.
+
+Script tests: `cd scripts && python3 -m unittest`.
 
 ## Load testing
 
@@ -30,4 +34,4 @@ npx wrangler dev --local --var OJP_ENDPOINT:http://127.0.0.1:8799/ojp20
 
 ## License
 
-MIT, see `LICENSE`. The deployed service and its keys are not covered. Station data is Didok, "Open use. Must provide the source."
+MIT, see `LICENSE`. The deployed service and its keys are not covered. Station data is Didok, "Open use. Must provide the source.", and Public Transport Victoria GTFS, CC BY 4.0. See `data/ATTRIBUTION`.

@@ -12,6 +12,7 @@ pub mod favourites;
 pub mod formation;
 pub mod geo;
 pub mod ojp;
+pub mod ptv;
 pub mod region;
 pub mod reqlog;
 pub mod stations;
@@ -26,7 +27,7 @@ pub use formation::{
     parse_formation_short_string, FormationError, FormationResult, Wagon, FORMATION_ENDPOINT,
 };
 pub use geo::{bounding_box, haversine_distance, MAX_DISTANCE, MAX_PER_MODE};
-pub use region::{region_for_point, region_for_station_id, Bounds, Region, Source, REGIONS};
+pub use region::{region_for_point, region_for_station_id, Bounds, Region, Source, REGIONS, VICTORIA};
 pub use reqlog::{format_line, route_template, CacheStatus};
 pub use ojp::{
     build_stop_event_request_xml, parse_stop_events, FlatDeparture, OJP_ENDPOINT,

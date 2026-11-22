@@ -5,6 +5,7 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Source {
     Ojp,
+    Ptv,
 }
 
 /// Coverage box in degrees, inclusive on every edge.
@@ -36,6 +37,13 @@ pub struct Region {
     pub formation: bool,
 }
 
+impl Region {
+    /// The id the region's source knows the station by.
+    pub fn local_id<'a>(&self, station_id: &'a str) -> &'a str {
+        station_id.strip_prefix(self.id_prefix).unwrap_or(station_id)
+    }
+}
+
 pub const SWITZERLAND: Region = Region {
     id: "ch",
     bounds: Bounds { lat_min: 45.8, lat_max: 47.8, lon_min: 5.9, lon_max: 10.5 },
@@ -45,8 +53,18 @@ pub const SWITZERLAND: Region = Region {
     formation: true,
 };
 
+/// Melbourne's trains and trams. Geelong and Ballarat fall outside the box.
+pub const VICTORIA: Region = Region {
+    id: "au-vic",
+    bounds: Bounds { lat_min: -38.50, lat_max: -37.40, lon_min: 144.40, lon_max: 145.70 },
+    timezone: "Australia/Melbourne",
+    id_prefix: "au-vic-",
+    source: Source::Ptv,
+    formation: false,
+};
+
 /// Switzerland stays first: it is the fallback for any id no prefix claims.
-pub static REGIONS: &[Region] = &[SWITZERLAND];
+pub static REGIONS: &[Region] = &[SWITZERLAND, VICTORIA];
 
 pub fn region_for_station_id(id: &str) -> &'static Region {
     region_for_station_id_in(REGIONS, id)
@@ -116,6 +134,23 @@ mod tests {
     #[test]
     fn point_inside_another_box_is_that_region() {
         assert_eq!(region_for_point_in(TEST_REGIONS, -9.5, 20.5).map(|r| r.id), Some("xx"));
+    }
+
+    #[test]
+    fn glenferrie_is_victoria_and_geelong_is_nowhere() {
+        assert_eq!(region_for_point(-37.8213, 145.0364).map(|r| r.id), Some("au-vic"));
+        assert_eq!(region_for_point(-38.1499, 144.3617), None);
+    }
+
+    #[test]
+    fn victorian_ids_go_to_ptv_without_formation() {
+        let r = region_for_station_id("au-vic-1105");
+        assert_eq!(r.id, "au-vic");
+        assert_eq!(r.source, Source::Ptv);
+        assert_eq!(r.timezone, "Australia/Melbourne");
+        assert!(!r.formation);
+        assert_eq!(r.local_id("au-vic-1105"), "1105");
+        assert_eq!(SWITZERLAND.local_id("8503000"), "8503000");
     }
 
     #[test]

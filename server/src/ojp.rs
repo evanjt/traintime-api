@@ -6,7 +6,7 @@ use traintime_core::UpstreamError;
 /// The Worker uses `js_sys::Date` here. The two are kept separate on purpose:
 /// the JS parser is the more lenient of the pair, so they must not be merged
 /// without checking real OJP payloads first.
-fn iso_to_ms(iso: &str) -> f64 {
+pub fn iso_to_ms(iso: &str) -> f64 {
     if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(iso) {
         return dt.timestamp_millis() as f64;
     }
