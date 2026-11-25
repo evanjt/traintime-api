@@ -2,6 +2,7 @@
 //! Cars run front first; `(` and `)` close a unit to its neighbour; the type gives the
 //! class and the restaurant; `-` is closed, `%` a restaurant open but not serving.
 
+use traintime_core::formation::is_operation_date;
 use traintime_core::{parse_formation_short_string, CoreError, FormationError, UpstreamError, Wagon};
 
 const IC708_BERN: &str =
@@ -134,11 +135,15 @@ fn a_narrow_gauge_unit_keeps_its_own_numbers() {
 }
 
 #[test]
-fn formation_404_is_no_data_and_any_other_failure_is_upstream_unavailable() {
-    let no_data = FormationError::check_status(404).unwrap_err();
-    assert_eq!(no_data.response().status, 404);
-    assert_eq!(no_data.response().retry_after, None);
-    assert_eq!(no_data.response().body, serde_json::json!({ "error": "No formation data" }));
+fn formation_400_or_404_is_no_data_and_any_other_failure_is_upstream_unavailable() {
+    // The service answers 400 for a date outside the day it holds or a train
+    // it has nothing for, and 404 for some unknown trains.
+    for status in [400, 404] {
+        let no_data = FormationError::check_status(status).unwrap_err();
+        assert_eq!(no_data.response().status, 404, "{status}");
+        assert_eq!(no_data.response().retry_after, None, "{status}");
+        assert_eq!(no_data.response().body, serde_json::json!({ "error": "No formation data" }), "{status}");
+    }
 
     let not_found_stop = FormationError::from(CoreError::StopNotFound("8507000".into()));
     assert_eq!(not_found_stop.response().status, 404);
@@ -147,6 +152,8 @@ fn formation_404_is_no_data_and_any_other_failure_is_upstream_unavailable() {
     for e in [
         FormationError::check_status(502).unwrap_err(),
         FormationError::check_status(500).unwrap_err(),
+        FormationError::check_status(401).unwrap_err(),
+        FormationError::check_status(429).unwrap_err(),
         FormationError::from(UpstreamError::Timeout),
         FormationError::from(UpstreamError::Unparseable("eof".into())),
     ] {
@@ -154,5 +161,15 @@ fn formation_404_is_no_data_and_any_other_failure_is_upstream_unavailable() {
         assert_eq!(r.status, 503, "{e}");
         assert_eq!(r.retry_after, Some(30), "{e}");
         assert_eq!(r.body, serde_json::json!({ "error": "upstream_unavailable" }), "{e}");
+    }
+}
+
+#[test]
+fn operation_date_is_four_two_two_digits() {
+    for ok in ["2026-11-25", "2000-01-01"] {
+        assert!(is_operation_date(ok), "{ok}");
+    }
+    for bad in ["tomorrow", "2026-1-25", "2026/11/25", "20261125", "2026-11-25T00:00", "2026-11-2a", " 2026-11-25", ""] {
+        assert!(!is_operation_date(bad), "{bad}");
     }
 }

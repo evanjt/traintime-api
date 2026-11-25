@@ -20,6 +20,8 @@ pub struct AppState {
     pub ojp_endpoint: String,
     pub ojp_api_key: String,
     pub formation_api_key: String,
+    /// FORMATION_ENDPOINT override, for the same reason as OJP_ENDPOINT.
+    pub formation_endpoint: String,
     /// PTV_ENDPOINT override, for the same reason as OJP_ENDPOINT.
     pub ptv_endpoint: String,
     /// PTV_DEVID and PTV_KEY. Unset, Victorian stations answer 503.
@@ -42,6 +44,7 @@ impl AppState {
             ojp_endpoint: ojp_endpoint.to_string(),
             ojp_api_key: "key".to_string(),
             formation_api_key: "key".to_string(),
+            formation_endpoint: "http://127.0.0.1:9".to_string(),
             ptv_endpoint: "http://127.0.0.1:9".to_string(),
             ptv_devid: None,
             ptv_key: None,
@@ -54,6 +57,11 @@ impl AppState {
         self.ptv_endpoint = endpoint.to_string();
         self.ptv_devid = Some(devid.to_string());
         self.ptv_key = Some(key.to_string());
+        self
+    }
+
+    pub fn with_formation(mut self, endpoint: &str) -> Self {
+        self.formation_endpoint = endpoint.to_string();
         self
     }
 

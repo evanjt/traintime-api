@@ -1,5 +1,5 @@
 use traintime_core::formation::{
-    parse_formation_response, FormationError, FormationResult, FORMATION_ENDPOINT,
+    parse_formation_response, FormationError, FormationResult,
 };
 use traintime_core::UpstreamError;
 
@@ -7,6 +7,7 @@ use crate::ojp::request_error;
 
 pub async fn fetch_formation(
     http: &reqwest::Client,
+    endpoint: &str,
     api_key: &str,
     evu: &str,
     date: &str,
@@ -14,7 +15,7 @@ pub async fn fetch_formation(
     stop_uic: Option<&str>,
 ) -> Result<FormationResult, FormationError> {
     let url =
-        format!("{FORMATION_ENDPOINT}?evu={evu}&operationDate={date}&trainNumber={train_number}");
+        format!("{endpoint}?evu={evu}&operationDate={date}&trainNumber={train_number}");
 
     let start = std::time::Instant::now();
 

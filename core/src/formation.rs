@@ -244,6 +244,18 @@ pub fn parse_formation_response(
     })
 }
 
+/// Whether `date` has the `YYYY-MM-DD` shape the formation service takes as
+/// its operation date. Anything else is the caller's mistake, answered 400
+/// before the service is asked.
+pub fn is_operation_date(date: &str) -> bool {
+    let b = date.as_bytes();
+    b.len() == 10
+        && b.iter().enumerate().all(|(i, c)| match i {
+            4 | 7 => *c == b'-',
+            _ => c.is_ascii_digit(),
+        })
+}
+
 /// Why a formation request has nothing to show.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FormationError {
@@ -253,10 +265,12 @@ pub enum FormationError {
 }
 
 impl FormationError {
-    /// The service answers 404 for a train it has no formation for. Every
+    /// The service answers 400 for a date outside the day it holds or a train
+    /// it has nothing for, and 404 for a train it does not know. The route
+    /// checks the request's own shape first, so either means no data. Every
     /// other non-2xx is an outage.
     pub fn check_status(status: u16) -> Result<(), FormationError> {
-        if status == 404 {
+        if status == 400 || status == 404 {
             return Err(FormationError::NoData(format!("formation service answered {status}")));
         }
         UpstreamError::check_status(status).map_err(FormationError::Upstream)

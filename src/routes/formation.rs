@@ -9,7 +9,7 @@ use crate::cache::{self, Cached};
 use crate::formation::fetch_formation;
 use crate::routes::{respond, respond_error};
 use crate::AppState;
-use traintime_core::formation::{extract_train_number, operator_ref_to_evu};
+use traintime_core::formation::{extract_train_number, is_operation_date, operator_ref_to_evu};
 use traintime_core::region::region_for_station_id;
 
 const FORMATION_CACHE_TTL: u64 = 300;
@@ -46,6 +46,11 @@ pub async fn handle_formation(
                 serde_json::json!({ "error": "Missing date parameter" }), None, CacheStatus::None);
         }
     };
+    if !is_operation_date(&date) {
+        return respond(
+            StatusCode::BAD_REQUEST,
+            serde_json::json!({ "error": "Invalid date parameter" }), None, CacheStatus::None);
+    }
 
     let train_number = extract_train_number(&train_raw);
     if train_number.is_empty() {
