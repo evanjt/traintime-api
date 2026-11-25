@@ -17,6 +17,11 @@ fn iso_to_ms(iso: &str) -> f64 {
     date.get_time()
 }
 
+/// Unix seconds now, from the JS clock.
+pub fn unix_now() -> i64 {
+    (js_sys::Date::now() / 1000.0) as i64
+}
+
 pub async fn fetch_departures(
     endpoint: &str,
     api_key: &str,

@@ -196,6 +196,7 @@ fn departure(number: &str, to: &str, departure: i64) -> FlatDeparture {
         platform_changed: false,
         train_number: None,
         operator_ref: None,
+        cancelled: false,
     }
 }
 

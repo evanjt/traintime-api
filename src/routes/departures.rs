@@ -6,7 +6,8 @@ use traintime_core::CacheStatus;
 use worker::console_log;
 
 use crate::cache::{self, Cached};
-use crate::ojp::FlatDeparture;
+use crate::ojp::unix_now;
+use traintime_core::ojp::upcoming_from_cache;
 use crate::source::fetch_departures_for;
 use crate::routes::{respond, respond_error};
 use crate::AppState;
@@ -76,7 +77,7 @@ pub async fn handle_departures(
             }
         }
     };
-    let departures: Vec<FlatDeparture> = match serde_json::from_str(&json) {
+    let departures = match upcoming_from_cache(&json, unix_now()) {
         Ok(d) => d,
         Err(e) => {
             return respond(

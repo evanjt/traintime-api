@@ -21,6 +21,32 @@ pub struct FlatDeparture {
     pub train_number: Option<String>,
     #[serde(rename = "operatorRef", skip_serializing_if = "Option::is_none")]
     pub operator_ref: Option<String>,
+    /// The journey is cancelled or does not serve this stop. Omitted when false,
+    /// which the apps read as running.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub cancelled: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+/// How long past its effective time a departure stays on the board.
+pub const DEPARTED_GRACE_SECS: i64 = 5 * 60;
+
+/// Drops rows whose effective time, planned plus delay, is more than the grace
+/// before `now_secs`. Upstream keeps publishing a train long past its time when
+/// it has no realtime update, and the cache serves rows for minutes after they
+/// were fetched, so this runs on every answer and before any limit is applied.
+pub fn drop_departed(mut departures: Vec<FlatDeparture>, now_secs: i64) -> Vec<FlatDeparture> {
+    departures.retain(|d| d.departure + d.delay.unwrap_or(0) * 60 + DEPARTED_GRACE_SECS >= now_secs);
+    departures
+}
+
+/// The rows a cached board serves at `now_secs`. Every route that answers
+/// departures reads its board through here, so none serves a row long gone.
+pub fn upcoming_from_cache(json: &str, now_secs: i64) -> serde_json::Result<Vec<FlatDeparture>> {
+    serde_json::from_str(json).map(|rows| drop_departed(rows, now_secs))
 }
 
 /// `now_iso` and `message_id` are passed in rather than read from a clock, so this
@@ -161,6 +187,7 @@ where
 
         // The operating day is part of the key so a board spanning midnight keeps
         // both runs of a journey that repeats the next day.
+        let cancelled = xml_text(service_block, "Cancelled").as_deref() == Some("true");
         let journey_key = xml_text(service_block, "JourneyRef").map(|journey| {
             let day = xml_text(service_block, "OperatingDayRef").unwrap_or_default();
             format!("{day}|{journey}")
@@ -206,6 +233,8 @@ where
             delay = if delay_min > 0 { Some(delay_min) } else { None };
         }
 
+        let cancelled = cancelled || xml_text(&call_block, "NotServicedStop").as_deref() == Some("true");
+
         let platform_changed = estimated_quay
             .as_ref()
             .map(|eq| eq != &planned_quay)
@@ -223,6 +252,7 @@ where
                 platform_changed,
                 train_number,
                 operator_ref,
+                cancelled,
             },
         ));
     }
@@ -379,6 +409,109 @@ mod tests {
     fn results_without_a_journey_ref_are_all_kept() {
         let xml = format!("<OJP>{}</OJP>", STOP_EVENT.repeat(3));
         assert_eq!(parse_stop_events(&xml, |_| 0.0).len(), 3);
+    }
+
+    fn call(time: &str, estimated: Option<&str>, call_extra: &str, service_extra: &str) -> String {
+        let estimated = estimated.map(|e| format!("<EstimatedTime>{e}</EstimatedTime>")).unwrap_or_default();
+        format!(
+            r#"<StopEventResult><StopEvent>
+              <ThisCall><CallAtStop>
+                <ServiceDeparture><TimetabledTime>{time}</TimetabledTime>{estimated}</ServiceDeparture>
+                <PlannedQuay><Text>15</Text></PlannedQuay>{call_extra}
+              </CallAtStop></ThisCall>
+              <Service>
+                <Mode><ShortName><Text>IC</Text></ShortName></Mode>
+                <PublishedServiceName><Text>IC8</Text></PublishedServiceName>
+                <DestinationText><Text>Lakeside</Text></DestinationText>{service_extra}
+              </Service>
+            </StopEvent></StopEventResult>"#
+        )
+    }
+
+    const NOW: i64 = 9 * 3600 + 33 * 60;
+
+    // Scenario: OJP keeps returning a train 49 minutes past its time with no
+    // realtime estimate, ahead of the live rows.
+    // Expected behaviour: it is not served, and the live row after it is.
+    #[test]
+    fn a_row_long_past_its_time_without_a_delay_is_dropped() {
+        let rows = parse(&[
+            call("2026-10-11T08:44:00Z", None, "", ""),
+            call("2026-10-11T09:40:00Z", None, "", ""),
+        ]);
+        assert_eq!(rows[0].delay, None);
+
+        let rows = drop_departed(rows, NOW);
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].departure, 9 * 3600 + 40 * 60);
+    }
+
+    // A train whose planned time is past but whose delay puts it still ahead,
+    // or one that has just left, stays on the board.
+    #[test]
+    fn a_delayed_row_and_one_just_gone_stay() {
+        let rows = parse(&[
+            call("2026-10-11T09:10:00Z", Some("2026-10-11T09:35:00Z"), "", ""),
+            call("2026-10-11T09:31:00Z", None, "", ""),
+        ]);
+
+        assert_eq!(drop_departed(rows, NOW).len(), 2);
+    }
+
+    // A board read back from the cache is filtered the same way.
+    #[test]
+    fn a_cached_board_drops_rows_past_their_time() {
+        let rows = parse(&[call("2026-10-11T08:44:00Z", None, "", ""), call("2026-10-11T09:40:00Z", None, "", "")]);
+        let json = serde_json::to_string(&rows).unwrap();
+
+        let served = upcoming_from_cache(&json, NOW).unwrap();
+
+        assert_eq!(served.len(), 1);
+        assert!(upcoming_from_cache("not json", NOW).is_err());
+    }
+
+    // The grace is inclusive at its edge and drops the row a second past it.
+    #[test]
+    fn the_grace_ends_exactly_at_its_edge() {
+        let rows = parse(&[call("2026-10-11T09:28:00Z", None, "", "")]);
+        assert_eq!(drop_departed(rows.clone(), NOW).len(), 1);
+        assert_eq!(drop_departed(rows, NOW + 1).len(), 0);
+    }
+
+    // Scenario: the whole journey is cancelled.
+    // Expected behaviour: the row carries cancelled, and a running row does not.
+    #[test]
+    fn a_cancelled_journey_is_flagged() {
+        let rows = parse(&[
+            call("2026-10-11T09:40:00Z", None, "", "<Cancelled>true</Cancelled>"),
+            call("2026-10-11T09:50:00Z", None, "", "<Cancelled>false</Cancelled>"),
+        ]);
+
+        assert!(rows[0].cancelled);
+        assert!(!rows[1].cancelled);
+    }
+
+    // Scenario: the journey runs but skips this stop.
+    #[test]
+    fn a_stop_not_served_is_flagged_cancelled() {
+        let rows = parse(&[call("2026-10-11T09:40:00Z", None, "<NotServicedStop>true</NotServicedStop>", "")]);
+        assert!(rows[0].cancelled);
+    }
+
+    // The apps read a missing field as running, so a running row omits it, and
+    // rows cached before the field existed still read.
+    #[test]
+    fn cancelled_is_omitted_when_false_and_defaults_when_absent() {
+        let rows = parse(&[call("2026-10-11T09:40:00Z", None, "", "")]);
+        let json = serde_json::to_string(&rows).unwrap();
+        assert!(!json.contains("cancelled"));
+
+        let cancelled = parse(&[call("2026-10-11T09:40:00Z", None, "", "<Cancelled>true</Cancelled>")]);
+        assert!(serde_json::to_string(&cancelled).unwrap().contains(r#""cancelled":true"#));
+
+        let old: Vec<FlatDeparture> = serde_json::from_str(&json).unwrap();
+        assert!(!old[0].cancelled);
     }
 
     // Scenario: a cache miss parses 50 stop events inside the Worker's CPU

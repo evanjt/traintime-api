@@ -195,6 +195,9 @@ struct Direction {
 #[derive(Deserialize)]
 struct Run {
     destination_name: Option<String>,
+    /// `scheduled`, `updated` or `cancelled` for a metro run, `scheduled` for
+    /// every other mode.
+    status: Option<String>,
 }
 
 fn non_empty(s: &Option<String>) -> Option<&str> {
@@ -202,7 +205,7 @@ fn non_empty(s: &Option<String>) -> Option<&str> {
 }
 
 /// `iso_to_ms` comes from the caller, as for OJP, so each build keeps its own
-/// timestamp parser. Cancelled runs are not yet told apart from running ones.
+/// timestamp parser. A run whose status reads cancelled is flagged cancelled.
 pub fn parse_departures<F>(json: &str, route_type: u8, iso_to_ms: F) -> Result<Vec<FlatDeparture>, UpstreamError>
 where
     F: Fn(&str) -> f64,
@@ -216,6 +219,10 @@ where
             let scheduled = d.scheduled_departure_utc.as_deref()?;
             let scheduled_ms = iso_to_ms(scheduled);
             let route = d.route_id.and_then(|id| body.routes.get(&id.to_string()));
+            let run = d.run_ref.as_ref().and_then(|r| body.runs.get(r));
+            let cancelled = run
+                .and_then(|run| non_empty(&run.status))
+                .is_some_and(|status| status.eq_ignore_ascii_case("cancelled"));
             let number = route.and_then(Route::line).unwrap_or_default();
             // The run's destination is a stop name with a stop number, so the
             // direction name is shown and the run is only the fallback.
@@ -223,9 +230,7 @@ where
                 .direction_id
                 .and_then(|id| body.directions.get(&id.to_string()))
                 .and_then(|dir| non_empty(&dir.direction_name))
-                .or_else(|| {
-                    d.run_ref.as_ref().and_then(|r| body.runs.get(r)).and_then(|run| non_empty(&run.destination_name))
-                })
+                .or_else(|| run.and_then(|run| non_empty(&run.destination_name)))
                 .unwrap_or("?")
                 .to_string();
             let delay = d.estimated_departure_utc.as_deref().and_then(|est| {
@@ -242,6 +247,7 @@ where
                 platform_changed: false,
                 train_number: None,
                 operator_ref: None,
+                cancelled,
             })
         })
         .collect();
@@ -408,6 +414,26 @@ mod tests {
         assert_eq!(line_of(r#"{"route_type": 0, "route_name": "Belgrave", "route_number": ""}"#), "Belgrave");
         assert_eq!(line_of(r#"{"route_type": 0, "route_name": "Belgrave", "route_number": "", "route_gtfs_id": "2-"}"#), "Belgrave");
         assert_eq!(line_of(r#"{"route_type": 0, "route_name": "Belgrave", "route_number": "", "route_gtfs_id": "BEG"}"#), "Belgrave");
+    }
+
+    fn with_run_status(status: &str) -> FlatDeparture {
+        let json = format!(
+            r#"{{"departures": [{{"route_id": 1, "direction_id": 1, "run_ref": "7001", "scheduled_departure_utc": "2026-11-22T09:00:00Z"}}],
+            "routes": {{"1": {{"route_type": 0, "route_number": "", "route_gtfs_id": "2-ABC"}}}},
+            "directions": {{"1": {{"direction_name": "Somewhere"}}}},
+            "runs": {{"7001": {{"destination_name": "Somewhere", "status": "{status}"}}}}}}"#
+        );
+        parse_departures(&json, 0, iso_to_ms).unwrap().remove(0)
+    }
+
+    // Scenario: a cancelled metro run, which include_cancelled asks PTV to return.
+    // Expected behaviour: the row carries cancelled, a scheduled run does not.
+    #[test]
+    fn a_cancelled_run_is_flagged() {
+        assert!(with_run_status("cancelled").cancelled);
+        assert!(with_run_status("Cancelled").cancelled);
+        assert!(!with_run_status("scheduled").cancelled);
+        assert!(!parse_departures(TRAINS, 0, iso_to_ms).unwrap().iter().any(|r| r.cancelled));
     }
 
     #[test]

@@ -7,7 +7,8 @@ use wasm_bindgen::JsValue;
 use worker::console_log;
 
 use crate::cache::{self, Cached};
-use crate::ojp::FlatDeparture;
+use crate::ojp::unix_now;
+use traintime_core::ojp::upcoming_from_cache;
 use crate::source::fetch_departures_for;
 use crate::routes::respond;
 use crate::AppState;
@@ -121,7 +122,7 @@ pub async fn handle_nearby(
                 }
             }
         };
-        if let Some(mut d) = json.and_then(|j| serde_json::from_str::<Vec<FlatDeparture>>(&j).ok()) {
+        if let Some(mut d) = json.and_then(|j| upcoming_from_cache(&j, unix_now()).ok()) {
             d.truncate(embed_limit);
             groups.attach_departures(&id, d);
         }

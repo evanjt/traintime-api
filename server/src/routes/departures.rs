@@ -9,7 +9,7 @@ use crate::source::fetch_departures_for;
 use crate::routes::{respond, respond_error};
 use crate::state::AppState;
 use traintime_core::favourites::{parse_favourites, partition_favourites};
-use traintime_core::ojp::FlatDeparture;
+use traintime_core::ojp::upcoming_from_cache;
 use traintime_core::region::region_for_station_id;
 
 #[derive(Deserialize)]
@@ -60,7 +60,7 @@ pub async fn handle_departures(
             return respond_error(e.response(), cache);
         }
     };
-    let departures: Vec<FlatDeparture> = match serde_json::from_str(&json) {
+    let departures = match upcoming_from_cache(&json, (state.now)()) {
         Ok(d) => d,
         Err(e) => {
             return respond(StatusCode::INTERNAL_SERVER_ERROR, serde_json::json!({ "error": e.to_string() }), None, cache);
@@ -158,6 +158,24 @@ mod tests {
         assert_eq!(rows[0]["category"], "Metro");
         assert_eq!(rows[0]["delay"], 3);
         assert_eq!(rows[0]["platform"], "1");
+    }
+
+    // Scenario: the cache holds a board fetched earlier, and by now its first
+    // row, planned 09:05 and 3 minutes late, is well past.
+    // Expected behaviour: that row is not served, the later two are.
+    #[tokio::test]
+    async fn a_row_past_its_time_is_not_served() {
+        let state = AppState::for_test("http://127.0.0.1:9/ojp20")
+            .with_ptv(&stub_ptv().await, "3000123", "key")
+            .with_stations(vec![jordanville()])
+            .with_clock(|| 1_795_338_840); // 2026-11-22T09:14:00Z
+
+        let (status, body) = departures_body(state, "au-vic-1105").await;
+
+        assert_eq!(status, StatusCode::OK);
+        let rows = body["departures"].as_array().unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["departure"], 1_795_338_720);
     }
 
     const PTV_TRAMS: &str = include_str!("../../../core/fixtures/ptv_tram_departures.json");

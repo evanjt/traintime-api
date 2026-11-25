@@ -8,7 +8,7 @@ use crate::fetch::Fetched;
 use crate::source::fetch_departures_for;
 use crate::routes::respond;
 use crate::state::AppState;
-use traintime_core::ojp::FlatDeparture;
+use traintime_core::ojp::upcoming_from_cache;
 use traintime_core::region::region_for_station_id;
 use traintime_core::stations::{default_station_id, group_nearby};
 
@@ -66,7 +66,7 @@ pub async fn handle_nearby(
             }
             Fetched::Failed(_) => None,
         };
-        if let Some(mut d) = json.and_then(|j| serde_json::from_str::<Vec<FlatDeparture>>(&j).ok()) {
+        if let Some(mut d) = json.and_then(|j| upcoming_from_cache(&j, (state.now)()).ok()) {
             d.truncate(embed_limit);
             groups.attach_departures(&id, d);
         }

@@ -29,6 +29,12 @@ pub struct AppState {
     pub ptv_key: Option<String>,
     pub cache_ttl: u64,
     pub api_keys: Arc<ApiKeys>,
+    /// Unix seconds now. Rows past their time are dropped against it.
+    pub now: fn() -> i64,
+}
+
+pub fn unix_now() -> i64 {
+    chrono::Utc::now().timestamp()
 }
 
 #[cfg(test)]
@@ -50,7 +56,14 @@ impl AppState {
             ptv_key: None,
             cache_ttl: 60,
             api_keys: Arc::new(ApiKeys::parse(Some("test-key"), None).unwrap()),
+            // The epoch, so recorded fixtures are never past their time.
+            now: || 0,
         }
+    }
+
+    pub fn with_clock(mut self, now: fn() -> i64) -> Self {
+        self.now = now;
+        self
     }
 
     pub fn with_ptv(mut self, endpoint: &str, devid: &str, key: &str) -> Self {

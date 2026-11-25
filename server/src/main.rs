@@ -214,6 +214,7 @@ async fn run() -> Result<(), String> {
             std::env::var("API_KEYS").ok().as_deref(),
             std::env::var("API_KEY").ok().as_deref(),
         )?),
+        now: state::unix_now,
     };
 
     let app = Router::new()
