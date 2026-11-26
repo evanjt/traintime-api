@@ -19,7 +19,10 @@ pub mod stations;
 pub mod upstream;
 
 pub use auth::ApiKeys;
-pub use cache::{classify, CachedPayload, Freshness, STALE_MAX_AGE_SECS};
+pub use cache::{
+    classify, departures_body, departures_on_failure, departures_stale_window_secs, mark_stale, stale_max_age_secs, stale_opt_in, CachedPayload, Freshness,
+    StaleDepartures, DEPARTURES_STALE_MAX_AGE_SECS, STALE_MAX_AGE_SECS,
+};
 pub use error::CoreError;
 pub use favourites::{parse_favourites, partition_favourites};
 pub use formation::{
@@ -30,7 +33,7 @@ pub use geo::{bounding_box, haversine_distance, MAX_DISTANCE, MAX_PER_MODE};
 pub use region::{region_for_point, region_for_station_id, Bounds, Region, Source, REGIONS, VICTORIA};
 pub use reqlog::{format_line, route_template, CacheStatus};
 pub use ojp::{
-    build_stop_event_request_xml, parse_stop_events, FlatDeparture, OJP_ENDPOINT,
+    build_stop_event_request_xml, drop_departed, parse_stop_events, FlatDeparture, OJP_ENDPOINT,
 };
 pub use stations::{default_station_id, group_nearby, ModeGroups, NearbyStation, Station};
 pub use upstream::{ErrorResponse, UpstreamError, RETRY_AFTER_SECS, UPSTREAM_UNAVAILABLE};

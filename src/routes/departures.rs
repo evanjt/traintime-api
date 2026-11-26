@@ -7,18 +7,21 @@ use worker::console_log;
 
 use crate::cache::{self, Cached};
 use crate::ojp::unix_now;
-use traintime_core::ojp::upcoming_from_cache;
+use traintime_core::ojp::{drop_departed, FlatDeparture};
 use crate::source::fetch_departures_for;
 use crate::routes::{respond, respond_error};
 use crate::AppState;
 use traintime_core::region::region_for_station_id;
-use traintime_core::favourites::{parse_favourites, partition_favourites};
+use traintime_core::favourites::parse_favourites;
+use traintime_core::{departures_body, departures_on_failure, stale_opt_in};
 
 #[derive(Deserialize)]
 pub struct DeparturesQuery {
     id: Option<String>,
     limit: Option<u32>,
     favourites: Option<String>,
+    /// `1` opts in to a list older than the short window, marked with its age.
+    stale: Option<String>,
 }
 
 #[worker::send]
@@ -36,23 +39,23 @@ pub async fn handle_departures(
     };
 
     let limit = params.limit.unwrap_or(5);
+    let opt_in = stale_opt_in(params.stale.as_deref());
     let fav_pairs = params
         .favourites
         .as_deref()
         .map(parse_favourites)
         .unwrap_or_default();
-    let has_favourites = !fav_pairs.is_empty();
 
     // Always fetch 50 to populate cache; partition down to `limit` on return
     let fetch_limit = 50u32;
     let region = region_for_station_id(&station_id);
     let cache_key = format!("departures:{station_id}:{fetch_limit}");
     let mut cache;
-    let (json, stale) = match cache::get(&cache_key, state.cache_ttl).await {
+    let (departures, fetched_at) = match cache::get(&cache_key, state.cache_ttl).await {
         Cached::Fresh(v) => {
             console_log!("CACHE HIT {}", cache_key);
             cache = CacheStatus::Hit;
-            (v, None)
+            (parse(&v, cache), None)
         }
         cached => {
             console_log!("CACHE MISS {}", cache_key);
@@ -61,37 +64,41 @@ pub async fn handle_departures(
                 Ok(departures) => {
                     let json = serde_json::to_string(&departures).unwrap_or_default();
                     cache::put(&cache_key, &json, state.cache_ttl).await;
-                    (json, None)
+                    (Ok(departures), None)
                 }
-                Err(e) => match cached {
-                    Cached::Stale(v, age) => {
-                        console_log!("STALE {} {}s: {}", cache_key, age, e);
-                        cache = CacheStatus::Hit;
-                        (v, Some(age))
+                Err(e) => {
+                    let now_secs = (cache::now_ms() / 1000) as i64;
+                    let stale = match &cached {
+                        Cached::Stale(v, age) => departures_on_failure(v, *age, now_secs, opt_in).map(|s| (s, *age)),
+                        _ => None,
+                    };
+                    match stale {
+                        Some((s, age)) => {
+                            console_log!("STALE {} {}s: {}", cache_key, age, e);
+                            cache = CacheStatus::Hit;
+                            (Ok(s.departures), Some((s.fetched_at, age)))
+                        }
+                        None => {
+                            console_log!("Departures error: {}", e);
+                            return respond_error(e.response(), cache);
+                        }
                     }
-                    _ => {
-                        console_log!("Departures error: {}", e);
-                        return respond_error(e.response(), cache);
-                    }
-                },
+                }
             }
         }
     };
-    let departures = match upcoming_from_cache(&json, unix_now()) {
-        Ok(d) => d,
-        Err(e) => {
-            return respond(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                serde_json::json!({ "error": e.to_string() }), None, cache);
-        }
+    let departures = match departures {
+        Ok(d) => drop_departed(d, unix_now()),
+        Err(resp) => return resp,
     };
-    if has_favourites {
-        let (favs, deps) = partition_favourites(&departures, &fav_pairs, limit as usize);
-        return respond(
-            StatusCode::OK,
-            serde_json::json!({ "favourites": favs, "departures": deps }), stale, cache);
-    }
-    let mut departures = departures;
-    departures.truncate(limit as usize);
-    respond(StatusCode::OK, serde_json::json!({ "departures": departures }), stale, cache)
+    let body = departures_body(departures, &fav_pairs, limit as usize, fetched_at.and_then(|(at, _)| at));
+    respond(StatusCode::OK, body, fetched_at.map(|(_, age)| age), cache)
+}
+
+fn parse(json: &str, cache: CacheStatus) -> Result<Vec<FlatDeparture>, Response> {
+    serde_json::from_str(json).map_err(|e| {
+        respond(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            serde_json::json!({ "error": e.to_string() }), None, cache)
+    })
 }

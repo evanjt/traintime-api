@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use traintime_core::stale_max_age_secs;
+
 use crate::memcached::Memcached;
 
 /// Entries above this count trigger an expiry sweep on the next insert.
@@ -9,8 +11,11 @@ use crate::memcached::Memcached;
 /// (`formation:{evu}:{date}:{train}:{stop}`) are high cardinality.
 const SWEEP_THRESHOLD: usize = 4096;
 
-/// How long an expired entry is kept so it can be served when upstream fails.
-pub const STALE_MAX_AGE: Duration = Duration::from_secs(300);
+/// How long after its fetch the entry under `key` is kept so it can be
+/// served when upstream fails.
+pub fn stale_max_age(key: &str) -> Duration {
+    Duration::from_secs(stale_max_age_secs(key))
+}
 
 struct Entry {
     value: String,
@@ -19,7 +24,7 @@ struct Entry {
 }
 
 /// Per-pod stand-in for the Workers KV binding. Same get/put-with-TTL surface,
-/// plus expired entries linger for `STALE_MAX_AGE` behind `get_stale`.
+/// plus expired entries linger for their key's `stale_max_age` behind `get_stale`.
 /// With a shared Memcached the replicas see each other's fetches; without
 /// one this is exactly the per-pod cache.
 #[derive(Clone, Default)]
@@ -64,13 +69,14 @@ impl Cache {
         }
     }
 
-    /// An entry past its TTL but fetched within `max_age`, with its age in
-    /// seconds. Fresh entries qualify too, so callers check `get` first.
-    pub fn get_stale(&self, key: &str, max_age: Duration) -> Option<(String, u64)> {
+    /// An entry past its TTL but fetched within its key's `stale_max_age`,
+    /// with its age in seconds. Fresh entries qualify too, so callers check
+    /// `get` first.
+    pub fn get_stale(&self, key: &str) -> Option<(String, u64)> {
         let map = self.inner.lock().unwrap();
         let e = map.get(key)?;
         let age = e.fetched_at.elapsed();
-        if age > max_age {
+        if age > stale_max_age(key) {
             return None;
         }
         Some((e.value.clone(), age.as_secs()))
@@ -80,11 +86,11 @@ impl Cache {
         self.put_at(key, value, ttl_secs, Instant::now());
     }
 
-    fn put_at(&self, key: &str, value: &str, ttl_secs: u64, fetched_at: Instant) {
+    pub(crate) fn put_at(&self, key: &str, value: &str, ttl_secs: u64, fetched_at: Instant) {
         let mut map = self.inner.lock().unwrap();
         if map.len() > SWEEP_THRESHOLD {
             let now = Instant::now();
-            map.retain(|_, e| e.fetched_at + STALE_MAX_AGE > now);
+            map.retain(|k, e| e.fetched_at + stale_max_age(k) > now);
         }
         map.insert(
             key.to_string(),
@@ -124,7 +130,7 @@ mod tests {
         let cache = Cache::default();
         put_aged(&cache, "k", Duration::from_secs(299));
         assert_eq!(cache.get("k"), None);
-        let (value, age) = cache.get_stale("k", STALE_MAX_AGE).unwrap();
+        let (value, age) = cache.get_stale("k").unwrap();
         assert_eq!(value, "v");
         assert_eq!(age, 299);
     }
@@ -132,8 +138,17 @@ mod tests {
     #[test]
     fn stale_just_over_max_age_is_gone() {
         let cache = Cache::default();
-        put_aged(&cache, "k", STALE_MAX_AGE + Duration::from_millis(10));
-        assert_eq!(cache.get_stale("k", STALE_MAX_AGE), None);
+        put_aged(&cache, "k", stale_max_age("k") + Duration::from_millis(10));
+        assert_eq!(cache.get_stale("k"), None);
+    }
+
+    #[test]
+    fn departures_list_outlives_the_short_window() {
+        let cache = Cache::default();
+        put_aged(&cache, "departures:1:50", Duration::from_secs(20 * 60));
+        assert_eq!(cache.get_stale("departures:1:50").map(|(_, age)| age), Some(1200));
+        put_aged(&cache, "departures:2:50", Duration::from_secs(40 * 60));
+        assert_eq!(cache.get_stale("departures:2:50"), None);
     }
 
     #[test]
@@ -143,13 +158,15 @@ mod tests {
             put_aged(
                 &cache,
                 &format!("old{i}"),
-                STALE_MAX_AGE + Duration::from_secs(1),
+                stale_max_age("old") + Duration::from_secs(1),
             );
         }
         put_aged(&cache, "stale", Duration::from_secs(120));
+        put_aged(&cache, "departures:1:50", Duration::from_secs(20 * 60));
         cache.put("fresh", "v", 60);
         let len = cache.inner.lock().unwrap().len();
-        // "stale" and "fresh" survive, the expired batch does not.
-        assert_eq!(len, 2);
+        // "stale", the departures list and "fresh" survive, the expired batch
+        // does not.
+        assert_eq!(len, 3);
     }
 }

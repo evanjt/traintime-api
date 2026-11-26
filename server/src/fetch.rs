@@ -6,7 +6,7 @@ use tokio::sync::{Mutex, Notify};
 
 use traintime_core::{CacheStatus, UpstreamError};
 
-use crate::cache::{Cache, STALE_MAX_AGE};
+use crate::cache::Cache;
 
 /// What a route got back for a cache key.
 pub enum Fetched<E> {
@@ -92,7 +92,7 @@ fn from_cache<E>(cache: &Cache, key: &str, error: E) -> Fetched<E> {
     if let Some(v) = cache.get(key) {
         return Fetched::Cached(v);
     }
-    match cache.get_stale(key, STALE_MAX_AGE) {
+    match cache.get_stale(key) {
         Some((v, age)) => Fetched::Stale(v, age),
         None => Fetched::Failed(error),
     }

@@ -8,8 +8,9 @@ use crate::fetch::Fetched;
 use crate::source::fetch_departures_for;
 use crate::routes::{respond, respond_error};
 use crate::state::AppState;
-use traintime_core::favourites::{parse_favourites, partition_favourites};
+use traintime_core::favourites::parse_favourites;
 use traintime_core::ojp::upcoming_from_cache;
+use traintime_core::{departures_body, departures_on_failure, stale_opt_in, UpstreamError};
 use traintime_core::region::region_for_station_id;
 
 #[derive(Deserialize)]
@@ -17,6 +18,8 @@ pub struct DeparturesQuery {
     id: Option<String>,
     limit: Option<u32>,
     favourites: Option<String>,
+    /// `1` opts in to a list older than the short window, marked with its age.
+    stale: Option<String>,
 }
 
 pub async fn handle_departures(
@@ -33,12 +36,12 @@ pub async fn handle_departures(
     };
 
     let limit = params.limit.unwrap_or(5);
+    let opt_in = stale_opt_in(params.stale.as_deref());
     let fav_pairs = params
         .favourites
         .as_deref()
         .map(parse_favourites)
         .unwrap_or_default();
-    let has_favourites = !fav_pairs.is_empty();
 
     // Always fetch 50 to populate cache; partition down to `limit` on return
     let fetch_limit = 50u32;
@@ -51,10 +54,21 @@ pub async fn handle_departures(
             Ok(serde_json::to_string(&deps).unwrap_or_default())
         })
         .await;
-    let cache = fetched.cache_status();
+    let mut cache = fetched.cache_status();
     let (json, stale) = match fetched {
         Fetched::Fresh(v) | Fetched::Cached(v) => (v, None),
-        Fetched::Stale(v, age) => (v, Some(age)),
+        Fetched::Stale(v, age) => match departures_on_failure(&v, age, unix_now_secs(), opt_in) {
+            Some(s) => {
+                println!("STALE {cache_key} {age}s");
+                let json = serde_json::to_string(&s.departures).unwrap_or_default();
+                (json, Some((s.fetched_at, age)))
+            }
+            None => {
+                cache = CacheStatus::Miss;
+                println!("Departures error: cached list past its window or all departed");
+                return respond_error(UpstreamError::Timeout.response(), cache);
+            }
+        },
         Fetched::Failed(e) => {
             println!("Departures error: {e}");
             return respond_error(e.response(), cache);
@@ -66,26 +80,26 @@ pub async fn handle_departures(
             return respond(StatusCode::INTERNAL_SERVER_ERROR, serde_json::json!({ "error": e.to_string() }), None, cache);
         }
     };
-    if has_favourites {
-        let (favs, deps) = partition_favourites(&departures, &fav_pairs, limit as usize);
-        return respond(
-            StatusCode::OK,
-            serde_json::json!({ "favourites": favs, "departures": deps }), stale, cache);
-    }
-    let mut departures = departures;
-    departures.truncate(limit as usize);
-    respond(StatusCode::OK, serde_json::json!({ "departures": departures }), stale, cache)
+    let body = departures_body(departures, &fav_pairs, limit as usize, stale.and_then(|(at, _)| at));
+    respond(StatusCode::OK, body, stale.map(|(_, age)| age), cache)
+}
+
+pub fn unix_now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use axum::extract::{Path, RawQuery};
     use axum::routing::{get, post};
     use axum::Router;
     use traintime_core::stations::Station;
 
-    async fn stub_ojp(status: StatusCode) -> String {
+    pub(crate) async fn stub_ojp(status: StatusCode) -> String {
         let app = Router::new().route("/ojp20", post(move || async move { (status, "gateway error") }));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -96,7 +110,7 @@ mod tests {
     #[tokio::test]
     async fn ojp_502_answers_503_upstream_unavailable() {
         let state = AppState::for_test(&stub_ojp(StatusCode::BAD_GATEWAY).await);
-        let query = DeparturesQuery { id: Some("8507000".into()), limit: None, favourites: None };
+        let query = DeparturesQuery { id: Some("8507000".into()), limit: None, favourites: None, stale: None };
 
         let resp = handle_departures(State(state), Query(query)).await;
 
@@ -105,6 +119,75 @@ mod tests {
         let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(body, serde_json::json!({ "error": "upstream_unavailable" }));
+    }
+
+    fn unix_now() -> i64 {
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64
+    }
+
+    // A list cached `age` ago for a station, with one row gone and one to come.
+    pub(crate) fn cached_list(state: &AppState, age: std::time::Duration) {
+        let now = unix_now();
+        let row = |to: &str, departure: i64| serde_json::json!({
+            "to": to, "category": "IR", "number": "15", "departure": departure,
+            "delay": null, "platform": "3", "platformChanged": false,
+        });
+        let list = serde_json::json!([row("Gone", now - 600), row("Next", now + 600)]).to_string();
+        state.cache.put_at("departures:8507000:50", &list, 60, std::time::Instant::now() - age);
+    }
+
+    #[tokio::test]
+    async fn outage_serves_twenty_minute_old_list_with_its_age() {
+        let state = AppState::for_test(&stub_ojp(StatusCode::BAD_GATEWAY).await);
+        cached_list(&state, std::time::Duration::from_secs(20 * 60));
+
+        let (status, body) = departures_body_opted_in(state, "8507000", Some("1")).await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["stale"], true);
+        let age = unix_now() - body["fetchedAt"].as_i64().unwrap();
+        assert!((20 * 60..20 * 60 + 5).contains(&age), "{age}");
+        let to: Vec<&str> = body["departures"].as_array().unwrap().iter().map(|r| r["to"].as_str().unwrap()).collect();
+        assert_eq!(to, vec!["Next"]);
+    }
+
+    #[tokio::test]
+    async fn outage_past_the_window_answers_503() {
+        let state = AppState::for_test(&stub_ojp(StatusCode::BAD_GATEWAY).await);
+        cached_list(&state, std::time::Duration::from_secs(40 * 60));
+
+        let (status, body) = departures_body_opted_in(state, "8507000", Some("1")).await;
+
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body, serde_json::json!({ "error": "upstream_unavailable" }));
+    }
+
+    // Scenario: a client that does not read the stale fields asks during an
+    // outage, and the cached list is 20 minutes old.
+    // Expected behaviour: it gets the 503 it got before the long window existed.
+    #[tokio::test]
+    async fn outage_without_the_opt_in_answers_503_for_a_twenty_minute_old_list() {
+        let state = AppState::for_test(&stub_ojp(StatusCode::BAD_GATEWAY).await);
+        cached_list(&state, std::time::Duration::from_secs(20 * 60));
+
+        let (status, body) = departures_body(state, "8507000").await;
+
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body, serde_json::json!({ "error": "upstream_unavailable" }));
+    }
+
+    #[tokio::test]
+    async fn outage_serves_four_minute_old_list_without_stale_fields_either_way() {
+        for opt_in in [None, Some("1")] {
+            let state = AppState::for_test(&stub_ojp(StatusCode::BAD_GATEWAY).await);
+            cached_list(&state, std::time::Duration::from_secs(4 * 60));
+
+            let (status, body) = departures_body_opted_in(state, "8507000", opt_in).await;
+
+            assert_eq!(status, StatusCode::OK, "{opt_in:?}");
+            assert!(body.get("stale").is_none() && body.get("fetchedAt").is_none(), "{opt_in:?} {body}");
+            assert_eq!(body["departures"][0]["to"], "Next");
+        }
     }
 
     const PTV_TRAINS: &str = include_str!("../../../core/fixtures/ptv_train_departures.json");
@@ -136,7 +219,11 @@ mod tests {
     }
 
     async fn departures_body(state: AppState, id: &str) -> (StatusCode, serde_json::Value) {
-        let query = DeparturesQuery { id: Some(id.into()), limit: Some(10), favourites: None };
+        departures_body_opted_in(state, id, None).await
+    }
+
+    async fn departures_body_opted_in(state: AppState, id: &str, stale: Option<&str>) -> (StatusCode, serde_json::Value) {
+        let query = DeparturesQuery { id: Some(id.into()), limit: Some(10), favourites: None, stale: stale.map(Into::into) };
         let resp = handle_departures(State(state), Query(query)).await;
         let status = resp.status();
         let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();

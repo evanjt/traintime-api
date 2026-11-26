@@ -1,6 +1,6 @@
 use worker::{Cache, Headers, Response};
 
-use traintime_core::{classify, CachedPayload, Freshness, STALE_MAX_AGE_SECS};
+use traintime_core::{classify, stale_max_age_secs, CachedPayload, Freshness};
 
 pub enum Cached {
     Fresh(String),
@@ -9,7 +9,7 @@ pub enum Cached {
     Missing,
 }
 
-fn now_ms() -> u64 {
+pub fn now_ms() -> u64 {
     js_sys::Date::new_0().get_time() as u64
 }
 
@@ -35,14 +35,14 @@ pub async fn get(key: &str, ttl_secs: u64) -> Cached {
     let Ok(entry) = serde_json::from_str::<CachedPayload>(&raw) else {
         return Cached::Missing;
     };
-    match classify(entry.fetched_at, now_ms(), ttl_secs) {
+    match classify(entry.fetched_at, now_ms(), ttl_secs, stale_max_age_secs(key)) {
         Freshness::Fresh => Cached::Fresh(entry.payload),
         Freshness::Stale(age) => Cached::Stale(entry.payload, age),
         Freshness::Expired => Cached::Missing,
     }
 }
 
-/// The entry is kept for the stale window, freshness is judged on read. A
+/// The entry is kept for its key's stale window, freshness is judged on read. A
 /// failed put is ignored and the next request simply fetches again. The Cache
 /// API is a no-op outside a custom domain, so this also holds under
 /// `wrangler dev` without a zone.
@@ -55,7 +55,7 @@ pub async fn put(key: &str, payload: &str, ttl_secs: u64) {
         return;
     };
     let headers = Headers::new();
-    let max_age = ttl_secs.max(STALE_MAX_AGE_SECS);
+    let max_age = ttl_secs.max(stale_max_age_secs(key));
     if headers.set("Cache-Control", &format!("max-age={max_age}")).is_err() {
         return;
     }

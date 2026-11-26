@@ -2,7 +2,7 @@ use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::Response;
 use serde::Deserialize;
-use traintime_core::CacheStatus;
+use traintime_core::{departures_on_failure, mark_stale, stale_opt_in, CacheStatus};
 use wasm_bindgen::JsValue;
 use worker::console_log;
 
@@ -22,6 +22,8 @@ pub struct NearbyQuery {
     lon: Option<f64>,
     query: Option<String>,
     mode: Option<String>,
+    /// `1` opts in to a list older than the short window.
+    stale: Option<String>,
 }
 
 #[worker::send]
@@ -40,6 +42,7 @@ pub async fn handle_nearby(
 
     let query_lower = params.query.map(|q| q.to_lowercase());
     let requested_mode = params.mode;
+    let opt_in = stale_opt_in(params.stale.as_deref());
 
     let (lat_min, lat_max, lon_min, lon_max) = bounding_box(lat, lon);
 
@@ -91,6 +94,7 @@ pub async fn handle_nearby(
     let default_id = default_station_id(&groups, requested_mode.as_deref());
 
     let mut stale = None;
+    let mut fetched_at = None;
     let mut cache = CacheStatus::None;
     if let Some(id) = default_id {
         let region = region_for_station_id(&id);
@@ -114,8 +118,12 @@ pub async fn handle_nearby(
                         Cached::Stale(v, age) => {
                             console_log!("STALE {} {}s: {}", cache_key, age, e);
                             cache = CacheStatus::Hit;
-                            stale = Some(age);
-                            Some(v)
+                            let now_secs = (cache::now_ms() / 1000) as i64;
+                            let left = departures_on_failure(&v, age, now_secs, opt_in);
+                            fetched_at = left.as_ref().and_then(|s| s.fetched_at);
+                            let left = left.and_then(|s| serde_json::to_string(&s.departures).ok());
+                            stale = left.as_ref().map(|_| age);
+                            left
                         }
                         _ => None,
                     },
@@ -128,12 +136,12 @@ pub async fn handle_nearby(
         }
     }
 
-    respond(
-        StatusCode::OK,
-        serde_json::json!({
-            "train": groups.train,
-            "bus": groups.bus,
-            "tram": groups.tram,
-            "special": groups.special,
-        }), stale, cache)
+    let mut body = serde_json::json!({
+        "train": groups.train,
+        "bus": groups.bus,
+        "tram": groups.tram,
+        "special": groups.special,
+    });
+    mark_stale(&mut body, fetched_at);
+    respond(StatusCode::OK, body, stale, cache)
 }
